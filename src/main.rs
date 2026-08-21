@@ -1,15 +1,11 @@
-use cpal::traits::HostTrait;
+mod audio;
 
-fn list_asio_devices() {
-    let host = cpal::host_from_id(cpal::HostId::Asio).expect("ASIO host unavailable");
+use audio::engine;
 
-    println!("ASIO devices:");
-    for device in host.devices().expect("failed to enumerate ASIO devices") {
-        println!("  - {device}");
-    }
+struct LooperApp {
+    _input_stream: cpal::Stream,
+    _output_stream: cpal::Stream,
 }
-
-struct LooperApp;
 
 impl eframe::App for LooperApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -18,7 +14,7 @@ impl eframe::App for LooperApp {
 }
 
 fn main() -> eframe::Result {
-    list_asio_devices();
+    engine::list_asio_devices();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([320.0, 240.0]),
@@ -28,6 +24,12 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Looper Pedal",
         options,
-        Box::new(|_cc| Ok(Box::new(LooperApp))),
+        Box::new(|_cc| {
+            let (_input_stream, _output_stream) = engine::build_passthrough_streams();
+            Ok(Box::new(LooperApp {
+                _input_stream,
+                _output_stream,
+            }))
+        }),
     )
 }

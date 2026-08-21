@@ -7,3 +7,4 @@ edition = "2024"
 cpal = { version = "0.18.2", features = ["asio"] }
 eframe = { version = "0.36.1", features = ["glow"] }
 egui = "0.36.1"
+ringbuf = "0.5.1"

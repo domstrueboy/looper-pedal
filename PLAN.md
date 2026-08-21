@@ -70,6 +70,19 @@ from UI/state logic. No locks or allocations on the audio thread; state
 changes (button presses, mode transitions) communicate to/from it via a
 lock-free channel or atomics only.
 
+No separate UI library either — egui's immediate-mode style already gives
+reuse for free. UI pieces (state indicator, progress bar, button, device
+picker) are small standalone functions/structs in `ui/`, e.g.
+`fn state_indicator(ui: &mut egui::Ui, state: &LoopState)`, called from
+wherever needed. Only worth factoring further if duplication actually
+shows up later — not upfront.
+
+## Workflow
+
+Commit after each implementation step (see the numbered list below) with
+a small, descriptive message — keeps history reviewable step by step
+instead of one large diff at the end.
+
 ## Build prerequisites (Windows side)
 
 - Rust via rustup, **MSVC toolchain** (`x86_64-pc-windows-msvc`)
@@ -152,6 +165,12 @@ Small, ordered, each one runnable/verifiable before moving to the next.
     device-open failures gracefully instead of panicking.
     *Verify:* app starts, lets you pick the Audient interface, runs end
     to end as a real MVP.
+11. **Docs (initial pass)** — once the MVP works end to end:
+    - *Technical* (`README.md` or `docs/technical.md`): architecture
+      overview, module layout, how the audio thread/state machine talk to
+      each other, build/setup steps (toolchain, ASIO SDK auto-fetch).
+    - *User* (`docs/user-guide.md`): what the app does, the button/
+      spacebar cycle and long-press clear, how to pick your ASIO device.
 
 ## v2 backlog (explicitly deferred)
 
@@ -162,3 +181,9 @@ Small, ordered, each one runnable/verifiable before moving to the next.
 - Save loop to file
 - Tempo sync / metronome
 - Waveform rendering
+
+## Documentation update (after v2)
+
+Once any v2 item above is implemented, update both docs (technical +
+user) to reflect it — docs stay in sync with whatever's actually built,
+not frozen at the MVP.

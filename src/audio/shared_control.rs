@@ -34,11 +34,13 @@ impl SharedControl {
     }
 
     /// Recorded loop duration in seconds (0.0 if empty) and current
-    /// playback position as a 0.0-1.0 fraction through the loop.
-    pub fn loop_duration_and_progress(&self, sample_rate: u32, channels: u16) -> (f32, f32) {
+    /// playback position as a 0.0-1.0 fraction through the loop. The loop
+    /// buffer is mono (one sample per frame), so just `sample_rate` is
+    /// needed - no channel count.
+    pub fn loop_duration_and_progress(&self, sample_rate: u32) -> (f32, f32) {
         let loop_len = self.loop_len.load(Ordering::Acquire);
         let play_pos = self.play_pos.load(Ordering::Acquire);
-        let samples_per_second = (sample_rate as usize * channels as usize).max(1);
+        let samples_per_second = (sample_rate as usize).max(1);
 
         let duration_secs = loop_len as f32 / samples_per_second as f32;
         let progress_fraction = if loop_len > 0 {

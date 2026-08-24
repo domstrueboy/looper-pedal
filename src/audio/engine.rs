@@ -14,111 +14,193 @@ const MAX_LOOP_SECONDS: f32 = 60.0;
 const SCRATCH_CAPACITY: usize = 32768;
 const LATENCY_MS: f32 = 8.0;
 
+// Candidate rates to offer in the settings picker; only ones the chosen
+// device actually supports (per `contains_rate`) are shown.
+const CANDIDATE_SAMPLE_RATES: [u32; 5] = [44_100, 48_000, 88_200, 96_000, 192_000];
+
 fn asio_host() -> cpal::Host {
     cpal::host_from_id(cpal::HostId::Asio).expect("ASIO host unavailable")
 }
 
-pub fn list_asio_devices() {
-    println!("ASIO devices:");
-    for device in asio_host().devices().expect("failed to enumerate ASIO devices") {
-        println!("  - {device}");
-    }
+pub fn available_asio_devices() -> Result<Vec<String>, String> {
+    asio_host()
+        .devices()
+        .map_err(|e| format!("failed to enumerate ASIO devices: {e}"))
+        .map(|devices| devices.map(|d| d.to_string()).collect())
 }
 
-/// Finds the (single) ASIO device and negotiates a shared input/output
-/// config, asserting the i32 format this project is built around (the
-/// Audient iD4 MkII's native format).
-fn open_device_and_config() -> (cpal::Device, cpal::StreamConfig) {
-    let device = asio_host()
+fn find_device(device_name: &str) -> Result<cpal::Device, String> {
+    asio_host()
         .devices()
-        .expect("failed to enumerate ASIO devices")
-        .next()
-        .expect("no ASIO device found");
+        .map_err(|e| format!("failed to enumerate ASIO devices: {e}"))?
+        .find(|d| d.to_string() == device_name)
+        .ok_or_else(|| format!("ASIO device '{device_name}' not found"))
+}
 
-    println!("Using device: {device}");
+/// Sample rates from `CANDIDATE_SAMPLE_RATES` that `device_name` actually
+/// supports for the i32 format this project is built around.
+pub fn supported_sample_rates(device_name: &str) -> Result<Vec<u32>, String> {
+    let device = find_device(device_name)?;
+    let configs: Vec<_> = device
+        .supported_output_configs()
+        .map_err(|e| format!("failed to query supported configs: {e}"))?
+        .collect();
+
+    Ok(CANDIDATE_SAMPLE_RATES
+        .into_iter()
+        .filter(|&rate| {
+            configs
+                .iter()
+                .any(|c| c.sample_format() == cpal::SampleFormat::I32 && c.contains_rate(rate))
+        })
+        .collect())
+}
+
+/// Number of hardware input channels `device_name` exposes (e.g. 2 for the
+/// Audient iD4 MkII's two combo inputs), so settings can offer a picker.
+pub fn input_channel_count(device_name: &str) -> Result<u16, String> {
+    let device = find_device(device_name)?;
+    let config = device
+        .default_input_config()
+        .map_err(|e| format!("failed to get default input config: {e}"))?;
+    Ok(config.channels())
+}
+
+/// Finds `device_name` and negotiates an input/output config at
+/// `sample_rate`, asserting the i32 format this project is built around
+/// (the Audient iD4 MkII's native format). Returns a descriptive error
+/// instead of panicking, since device/rate mismatches are user-recoverable
+/// (pick a different one in settings) rather than programming errors.
+fn open_device_and_config(
+    device_name: &str,
+    sample_rate: u32,
+) -> Result<(cpal::Device, cpal::StreamConfig), String> {
+    let device = find_device(device_name)?;
 
     let input_config = device
         .default_input_config()
-        .expect("failed to get default input config");
+        .map_err(|e| format!("failed to get default input config: {e}"))?;
     let output_config = device
         .default_output_config()
-        .expect("failed to get default output config");
-    assert_eq!(
-        input_config.sample_format(),
-        output_config.sample_format(),
-        "input and output must share a sample format"
-    );
-    assert_eq!(
-        input_config.sample_format(),
-        cpal::SampleFormat::I32,
-        "expected an i32 ASIO stream (the Audient iD4 MkII's native format)"
-    );
+        .map_err(|e| format!("failed to get default output config: {e}"))?;
+    if input_config.sample_format() != output_config.sample_format() {
+        return Err("input and output must share a sample format".to_string());
+    }
+    if input_config.sample_format() != cpal::SampleFormat::I32 {
+        return Err(format!(
+            "unsupported sample format {:?} (expected i32)",
+            input_config.sample_format()
+        ));
+    }
 
-    let config: cpal::StreamConfig = input_config.into();
+    // `supported_output_configs()` lists a SEPARATE entry per channel
+    // count (1, 2, 3, 4, ...) at each rate - we must match the device's
+    // full channel count explicitly, or we'd silently pick the first
+    // (lowest, e.g. mono) entry instead of opening all real channels.
+    let full_channels = input_config.channels();
+    let output_configs: Vec<_> = device
+        .supported_output_configs()
+        .map_err(|e| format!("failed to query supported configs: {e}"))?
+        .collect();
+    let matching_range = output_configs
+        .into_iter()
+        .find(|c| {
+            c.sample_format() == cpal::SampleFormat::I32
+                && c.channels() == full_channels
+                && c.contains_rate(sample_rate)
+        })
+        .ok_or_else(|| format!("{sample_rate} Hz is not supported by '{device_name}'"))?;
+
+    let config: cpal::StreamConfig = matching_range.with_sample_rate(sample_rate).into();
     println!(
         "Stream config: {} Hz, {} channel(s), buffer size: {:?}",
         config.sample_rate, config.channels, config.buffer_size
     );
 
-    (device, config)
+    Ok((device, config))
 }
 
-/// Opens the (single) ASIO device for both input and output. Input is
-/// always passed through live; recording/looping is driven by `control`,
-/// published from the UI thread. `LoopBuffer` lives exclusively inside the
-/// output callback (never shared), so no locks are needed anywhere here.
-pub fn build_looper_streams(control: Arc<SharedControl>) -> (cpal::Stream, cpal::Stream, u32, u16) {
-    let (device, config) = open_device_and_config();
+/// Opens `device_name` at `sample_rate` for both input and output. Only
+/// `input_channel` (0-indexed) is actually captured/recorded/looped - it's
+/// treated as mono internally and duplicated equally across every output
+/// channel, so a single guitar input is centered in both ears rather than
+/// only coming out of one side. Input is always passed through live;
+/// recording/looping is driven by `control`, published from the UI thread.
+/// `LoopBuffer` lives exclusively inside the output callback (never
+/// shared), so no locks are needed anywhere here.
+pub fn build_looper_streams(
+    control: Arc<SharedControl>,
+    device_name: &str,
+    sample_rate: u32,
+    input_channel: u16,
+) -> Result<(cpal::Stream, cpal::Stream, u32), String> {
+    let (device, config) = open_device_and_config(device_name, sample_rate)?;
     let sample_rate = config.sample_rate;
     let channels = config.channels;
+    if input_channel >= channels {
+        return Err(format!(
+            "input channel {} is out of range (device has {channels} channel(s))",
+            input_channel + 1
+        ));
+    }
 
     // Headroom between the input and output callbacks, just enough to
     // absorb callback-timing jitter (not a deliberate monitoring delay).
-    let latency_frames = (LATENCY_MS / 1_000.0) * config.sample_rate as f32;
-    let latency_samples = latency_frames as usize * config.channels as usize;
+    // Everything from here on is mono (one sample per frame).
+    let latency_frames = ((LATENCY_MS / 1_000.0) * config.sample_rate as f32) as usize;
 
-    // Dry passthrough bridge (unchanged behavior from step 3).
-    let passthrough_ring = HeapRb::<i32>::new(latency_samples * 2);
+    // Dry passthrough bridge (unchanged behavior from step 3, now mono).
+    let passthrough_ring = HeapRb::<i32>::new(latency_frames * 2);
     let (mut passthrough_tx, mut passthrough_rx) = passthrough_ring.split();
-    for _ in 0..latency_samples {
+    for _ in 0..latency_frames {
         passthrough_tx.try_push(0).unwrap();
     }
 
     // Feeds captured samples from the input callback into the output
     // callback, which owns the LoopBuffer exclusively while Recording.
-    let recorder_ring = HeapRb::<i32>::new(latency_samples * 2);
+    let recorder_ring = HeapRb::<i32>::new(latency_frames * 2);
     let (mut recorder_tx, mut recorder_rx) = recorder_ring.split();
 
-    let loop_capacity =
-        (MAX_LOOP_SECONDS * config.sample_rate as f32) as usize * config.channels as usize;
+    let loop_capacity = (MAX_LOOP_SECONDS * config.sample_rate as f32) as usize;
     let mut loop_buffer = LoopBuffer::new(loop_capacity);
 
     let input_control = Arc::clone(&control);
+    let mut input_scratch = vec![0i32; SCRATCH_CAPACITY];
     let input_stream = device
         .build_input_stream(
             config.clone(),
             move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                if passthrough_tx.push_slice(data) < data.len() {
+                let frames = data.len() / channels as usize;
+                for (i, frame) in data.chunks_exact(channels as usize).enumerate() {
+                    input_scratch[i] = frame[input_channel as usize];
+                }
+                let mono = &input_scratch[..frames];
+
+                if passthrough_tx.push_slice(mono) < mono.len() {
                     eprintln!("output stream fell behind: try increasing latency");
                 }
                 if input_control.load_state() == LoopState::Recording {
-                    recorder_tx.push_slice(data);
+                    recorder_tx.push_slice(mono);
                 }
             },
             stream_err_fn,
             None,
         )
-        .expect("failed to build input stream");
+        .map_err(|e| format!("failed to build input stream: {e}"))?;
 
     let output_control = control;
-    let mut scratch = vec![0i32; SCRATCH_CAPACITY];
+    let mut dry_scratch = vec![0i32; SCRATCH_CAPACITY];
+    let mut loop_scratch = vec![0i32; SCRATCH_CAPACITY];
     let output_stream = device
         .build_output_stream(
             config,
             move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
-                let read = passthrough_rx.pop_slice(data);
-                if read < data.len() {
-                    data[read..].fill(0);
+                let frames = data.len() / channels as usize;
+                let dry = &mut dry_scratch[..frames];
+
+                let read = passthrough_rx.pop_slice(dry);
+                if read < frames {
+                    dry[read..].fill(0);
                     eprintln!("input stream fell behind: try increasing latency");
                 }
 
@@ -128,19 +210,25 @@ pub fn build_looper_streams(control: Arc<SharedControl>) -> (cpal::Stream, cpal:
 
                 match output_control.load_state() {
                     LoopState::Recording => {
-                        let n = recorder_rx.pop_slice(&mut scratch[..data.len()]);
+                        let n = recorder_rx.pop_slice(&mut loop_scratch[..frames]);
                         if n > 0 {
-                            loop_buffer.write(&scratch[..n]);
+                            loop_buffer.write(&loop_scratch[..n]);
                         }
                     }
                     LoopState::Looping => {
-                        let loop_out = &mut scratch[..data.len()];
+                        let loop_out = &mut loop_scratch[..frames];
                         loop_buffer.read_looped(loop_out);
-                        for (o, l) in data.iter_mut().zip(loop_out.iter()) {
-                            *o = o.saturating_add(*l);
+                        for (d, l) in dry.iter_mut().zip(loop_out.iter()) {
+                            *d = d.saturating_add(*l);
                         }
                     }
                     LoopState::Idle | LoopState::Stopped => {}
+                }
+
+                for (frame_out, &mono_sample) in
+                    data.chunks_exact_mut(channels as usize).zip(dry.iter())
+                {
+                    frame_out.fill(mono_sample);
                 }
 
                 output_control.publish_loop_progress(loop_buffer.len(), loop_buffer.play_pos());
@@ -148,14 +236,16 @@ pub fn build_looper_streams(control: Arc<SharedControl>) -> (cpal::Stream, cpal:
             stream_err_fn,
             None,
         )
-        .expect("failed to build output stream");
+        .map_err(|e| format!("failed to build output stream: {e}"))?;
 
-    input_stream.play().expect("failed to start input stream");
+    input_stream
+        .play()
+        .map_err(|e| format!("failed to start input stream: {e}"))?;
     output_stream
         .play()
-        .expect("failed to start output stream");
+        .map_err(|e| format!("failed to start output stream: {e}"))?;
 
-    (input_stream, output_stream, sample_rate, channels)
+    Ok((input_stream, output_stream, sample_rate))
 }
 
 fn stream_err_fn(err: cpal::Error) {

@@ -8,6 +8,8 @@ pub struct SettingsState {
     pub selected_rate: usize,
     pub input_channels: u16,
     pub selected_input_channel: usize,
+    /// Loop playback gain, 0-200% of unity - see `AppConfig::volume_pct`.
+    pub volume_pct: u32,
     pub error: Option<String>,
 }
 
@@ -40,6 +42,8 @@ impl SettingsState {
             .filter(|&ch| ch < input_channels as usize)
             .unwrap_or(0);
 
+        let volume_pct = saved.as_ref().map(|cfg| cfg.volume_pct).unwrap_or(100);
+
         Self {
             devices,
             selected_device,
@@ -47,6 +51,7 @@ impl SettingsState {
             selected_rate,
             input_channels,
             selected_input_channel,
+            volume_pct,
             error,
         }
     }
@@ -68,6 +73,7 @@ pub enum SettingsAction {
         device_name: String,
         sample_rate: u32,
         input_channel: u16,
+        volume_pct: u32,
     },
 }
 
@@ -147,11 +153,19 @@ pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Setting
                     });
 
                 ui.add_space(8.0);
+                ui.add(
+                    egui::Slider::new(&mut settings.volume_pct, 0..=200)
+                        .text("Loop volume")
+                        .suffix("%"),
+                );
+
+                ui.add_space(8.0);
                 if ui.button("Start").clicked() {
                     action = Some(SettingsAction::Start {
                         device_name: settings.devices[settings.selected_device].clone(),
                         sample_rate: settings.sample_rates[settings.selected_rate],
                         input_channel: settings.selected_input_channel as u16,
+                        volume_pct: settings.volume_pct,
                     });
                 }
             });

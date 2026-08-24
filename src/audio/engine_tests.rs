@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn apply_gain_pct_100_is_unchanged() {
+    let mut samples = [10, -20, 0];
+    apply_gain_pct(&mut samples, 100);
+    assert_eq!(samples, [10, -20, 0]);
+}
+
+#[test]
+fn apply_gain_pct_0_is_silence() {
+    let mut samples = [10, -20, 12345];
+    apply_gain_pct(&mut samples, 0);
+    assert_eq!(samples, [0, 0, 0]);
+}
+
+#[test]
+fn apply_gain_pct_200_doubles() {
+    let mut samples = [10, -20];
+    apply_gain_pct(&mut samples, 200);
+    assert_eq!(samples, [20, -40]);
+}
+
+#[test]
+fn apply_gain_pct_saturates_instead_of_wrapping() {
+    let mut samples = [i32::MAX, i32::MIN];
+    apply_gain_pct(&mut samples, 200);
+    assert_eq!(samples, [i32::MAX, i32::MIN]);
+}
+
+#[test]
 fn mix_add_sums_dry_and_loop_signal() {
     let mut dry = [10, 20, 30];
     mix_add(&mut dry, &[1, 2, 3]);

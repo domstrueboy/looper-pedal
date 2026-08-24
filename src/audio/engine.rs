@@ -239,6 +239,7 @@ pub fn build_looper_streams(
                         LoopState::Looping => {
                             let loop_out = &mut loop_scratch[..frames];
                             loop_buffer.read_looped(loop_out);
+                            apply_gain_pct(loop_out, output_control.volume_pct());
                             mix_add(dry, loop_out);
                         }
                         LoopState::Idle | LoopState::Stopped => {}
@@ -266,6 +267,15 @@ pub fn build_looper_streams(
 
 fn stream_err_fn(err: cpal::Error) {
     eprintln!("stream error: {err}");
+}
+
+/// Scales `samples` in place by `pct` percent (100 = unchanged), saturating
+/// rather than wrapping on overflow at high gain.
+fn apply_gain_pct(samples: &mut [i32], pct: u32) {
+    for s in samples.iter_mut() {
+        let scaled = (*s as i64 * pct as i64) / 100;
+        *s = scaled.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+    }
 }
 
 /// Adds `loop_signal` onto `dry` in place, saturating rather than

@@ -64,8 +64,9 @@ impl LooperPedalApp {
         device_name: &str,
         sample_rate: u32,
         input_channel: u16,
+        volume_pct: u32,
     ) -> Result<LooperState, String> {
-        let control = Arc::new(SharedControl::new());
+        let control = Arc::new(SharedControl::new(volume_pct));
         let (_input_stream, _output_stream, sample_rate) = engine::build_looper_streams(
             Arc::clone(&control),
             device_name,
@@ -86,8 +87,12 @@ impl LooperPedalApp {
     fn initial_screen() -> Screen {
         match AppConfig::load() {
             Some(cfg) => {
-                match Self::try_start_looper(&cfg.device_name, cfg.sample_rate, cfg.input_channel)
-                {
+                match Self::try_start_looper(
+                    &cfg.device_name,
+                    cfg.sample_rate,
+                    cfg.input_channel,
+                    cfg.volume_pct,
+                ) {
                     Ok(state) => Screen::Looper(state),
                     Err(err) => Screen::Settings(SettingsState::new(Some(err))),
                 }
@@ -107,15 +112,21 @@ impl eframe::App for LooperPedalApp {
                     device_name,
                     sample_rate,
                     input_channel,
+                    volume_pct,
                 }) = ui::settings::render(ui, settings)
                 {
-                    match LooperPedalApp::try_start_looper(&device_name, sample_rate, input_channel)
-                    {
+                    match LooperPedalApp::try_start_looper(
+                        &device_name,
+                        sample_rate,
+                        input_channel,
+                        volume_pct,
+                    ) {
                         Ok(state) => {
                             let _ = AppConfig {
                                 device_name,
                                 sample_rate,
                                 input_channel,
+                                volume_pct,
                             }
                             .save();
                             next_screen = Some(Screen::Looper(state));

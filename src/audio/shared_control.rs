@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
 use super::state_machine::LoopState;
 
@@ -21,10 +21,16 @@ pub struct SharedControl {
     // callback exactly when it's already falling behind.
     input_underruns: AtomicUsize,
     output_underruns: AtomicUsize,
+    // Loop playback gain (see `AppConfig::volume_pct`) - UI -> audio, same
+    // direction as `state`. Set at construction from the saved/chosen
+    // setting; nothing currently changes it afterward, but it's plumbed as
+    // a live atomic (not a plain field on the audio side) so it can become
+    // adjustable without a restart later, the same way `state` already is.
+    volume_pct: AtomicU32,
 }
 
 impl SharedControl {
-    pub fn new() -> Self {
+    pub fn new(volume_pct: u32) -> Self {
         Self {
             state: AtomicU8::new(LoopState::Idle as u8),
             clear_requested: AtomicBool::new(false),
@@ -32,6 +38,7 @@ impl SharedControl {
             play_pos: AtomicUsize::new(0),
             input_underruns: AtomicUsize::new(0),
             output_underruns: AtomicUsize::new(0),
+            volume_pct: AtomicU32::new(volume_pct),
         }
     }
 
@@ -77,6 +84,10 @@ impl SharedControl {
     pub(super) fn publish_loop_progress(&self, len: usize, pos: usize) {
         self.loop_len.store(len, Ordering::Release);
         self.play_pos.store(pos, Ordering::Release);
+    }
+
+    pub(super) fn volume_pct(&self) -> u32 {
+        self.volume_pct.load(Ordering::Acquire)
     }
 
     pub(super) fn note_input_underrun(&self) {

@@ -181,8 +181,10 @@ Small, ordered, each one runnable/verifiable before moving to the next.
   layer abstraction is shared with the v3 multitrack idea, so worth
   building once, generically, instead of solving overdub and multitrack
   separately
-- Loop playback volume — a Settings control, 0-200% gain applied to the
-  loop signal in the mix step (not the live dry passthrough)
+- ~~Loop playback volume~~ - done: a Settings slider (0-200%), persisted
+  in `AppConfig`, applied via `SharedControl::volume_pct` to the loop
+  signal only (not the live passthrough) in the output callback's mix
+  step
 - NAM model loading (insert-effect stage)
 - Save loop to file
 - Tempo sync / metronome

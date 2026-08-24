@@ -27,38 +27,59 @@ impl eframe::App for LooperApp {
         ui.ctx().request_repaint();
 
         let space_down = ui.ctx().input(|i| i.key_down(egui::Key::Space));
-        match self.input_handler.update(space_down, Instant::now()) {
-            InputEvent::ShortPress => {
-                self.state_machine.press();
-                self.control.publish_state(self.state_machine.state());
-            }
-            InputEvent::LongPressClear => {
-                self.state_machine.clear();
-                self.control.publish_state(self.state_machine.state());
-                self.control.request_clear();
-            }
-            InputEvent::None => {}
-        }
-
-        let (duration_secs, progress_fraction) = self
-            .control
-            .loop_duration_and_progress(self.sample_rate, self.channels);
 
         egui::Frame::default()
             .inner_margin(egui::Margin::same(16))
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 10.0;
+                ui.with_layout(
+                    egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                    |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.spacing_mut().item_spacing.y = 10.0;
 
-                ui.label("Looper Pedal");
-                ui.add_space(4.0);
-                ui::indicator::state_indicator(
-                    ui,
-                    self.state_machine.state(),
-                    duration_secs,
-                    progress_fraction,
+                            ui.label("Looper Pedal");
+                            ui.add_space(4.0);
+
+                            // Button and spacebar drive the exact same
+                            // InputHandler, so they're always
+                            // interchangeable and can't desync.
+                            let button_response = ui.add_sized(
+                                [90.0, 90.0],
+                                egui::Button::new("Press").corner_radius(45),
+                            );
+                            let button_down = button_response.is_pointer_button_down_on();
+
+                            match self
+                                .input_handler
+                                .update(space_down || button_down, Instant::now())
+                            {
+                                InputEvent::ShortPress => {
+                                    self.state_machine.press();
+                                    self.control.publish_state(self.state_machine.state());
+                                }
+                                InputEvent::LongPressClear => {
+                                    self.state_machine.clear();
+                                    self.control.publish_state(self.state_machine.state());
+                                    self.control.request_clear();
+                                }
+                                InputEvent::None => {}
+                            }
+
+                            ui.add_space(4.0);
+                            let (duration_secs, progress_fraction) = self
+                                .control
+                                .loop_duration_and_progress(self.sample_rate, self.channels);
+                            ui::indicator::state_indicator(
+                                ui,
+                                self.state_machine.state(),
+                                duration_secs,
+                                progress_fraction,
+                            );
+                            ui.add_space(4.0);
+                            ui.label("Space or button: cycle record/loop/stop  |  hold ~2s: clear");
+                        });
+                    },
                 );
-                ui.add_space(4.0);
-                ui.label("Space: cycle record/loop/stop  |  hold ~2s: clear");
             });
     }
 }

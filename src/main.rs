@@ -1,42 +1,46 @@
 mod audio;
+mod input;
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use audio::engine::{self, SharedControl};
 use audio::state_machine::LoopStateMachine;
+use input::{InputEvent, InputHandler};
 
 struct LooperApp {
     control: Arc<SharedControl>,
     state_machine: LoopStateMachine,
+    input_handler: InputHandler,
     _input_stream: cpal::Stream,
     _output_stream: cpal::Stream,
 }
 
 impl eframe::App for LooperApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Temporary input for step 6 verification only - Space cycles the
-        // state machine, C clears. Step 7 replaces this with real
-        // spacebar + long-press-to-clear detection.
-        let (space_pressed, clear_pressed) = ui
-            .ctx()
-            .input(|i| (i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::C)));
+        // Long-press detection needs continuous frame updates, not just
+        // repaints triggered by input events.
+        ui.ctx().request_repaint();
 
-        if space_pressed {
-            self.state_machine.press();
-            self.control.publish_state(self.state_machine.state());
-            println!("State: {:?}", self.state_machine.state());
-        }
-
-        if clear_pressed {
-            self.state_machine.clear();
-            self.control.publish_state(self.state_machine.state());
-            self.control.request_clear();
-            println!("State: {:?} (cleared)", self.state_machine.state());
+        let space_down = ui.ctx().input(|i| i.key_down(egui::Key::Space));
+        match self.input_handler.update(space_down, Instant::now()) {
+            InputEvent::ShortPress => {
+                self.state_machine.press();
+                self.control.publish_state(self.state_machine.state());
+                println!("State: {:?}", self.state_machine.state());
+            }
+            InputEvent::LongPressClear => {
+                self.state_machine.clear();
+                self.control.publish_state(self.state_machine.state());
+                self.control.request_clear();
+                println!("State: {:?} (cleared)", self.state_machine.state());
+            }
+            InputEvent::None => {}
         }
 
         ui.label("Looper Pedal");
         ui.label(format!("State: {:?}", self.state_machine.state()));
-        ui.label("Space: cycle record/loop/stop  |  C: clear (temporary, step 6 only)");
+        ui.label("Space: cycle record/loop/stop  |  hold ~2s: clear");
     }
 }
 
@@ -57,6 +61,7 @@ fn main() -> eframe::Result {
             Ok(Box::new(LooperApp {
                 control,
                 state_machine: LoopStateMachine::new(),
+                input_handler: InputHandler::new(),
                 _input_stream,
                 _output_stream,
             }))

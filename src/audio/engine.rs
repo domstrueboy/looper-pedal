@@ -239,18 +239,12 @@ pub fn build_looper_streams(
                         LoopState::Looping => {
                             let loop_out = &mut loop_scratch[..frames];
                             loop_buffer.read_looped(loop_out);
-                            for (d, l) in dry.iter_mut().zip(loop_out.iter()) {
-                                *d = d.saturating_add(*l);
-                            }
+                            mix_add(dry, loop_out);
                         }
                         LoopState::Idle | LoopState::Stopped => {}
                     }
 
-                    for (frame_out, &mono_sample) in
-                        out.chunks_exact_mut(channels as usize).zip(dry.iter())
-                    {
-                        frame_out.fill(mono_sample);
-                    }
+                    duplicate_mono_to_channels(dry, channels, out);
                 }
 
                 output_control.publish_loop_progress(loop_buffer.len(), loop_buffer.play_pos());
@@ -273,3 +267,24 @@ pub fn build_looper_streams(
 fn stream_err_fn(err: cpal::Error) {
     eprintln!("stream error: {err}");
 }
+
+/// Adds `loop_signal` onto `dry` in place, saturating rather than
+/// wrapping so a loud loop can't wrap a live signal around into its
+/// opposite sign.
+fn mix_add(dry: &mut [i32], loop_signal: &[i32]) {
+    for (d, l) in dry.iter_mut().zip(loop_signal.iter()) {
+        *d = d.saturating_add(*l);
+    }
+}
+
+/// Duplicates a mono signal equally across every output channel, so a
+/// single guitar input is centered rather than only coming out one side.
+fn duplicate_mono_to_channels(mono: &[i32], channels: u16, out: &mut [i32]) {
+    for (frame_out, &sample) in out.chunks_exact_mut(channels as usize).zip(mono.iter()) {
+        frame_out.fill(sample);
+    }
+}
+
+#[cfg(test)]
+#[path = "engine_tests.rs"]
+mod tests;

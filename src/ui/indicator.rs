@@ -1,5 +1,21 @@
 use crate::audio::state_machine::LoopState;
 
+/// Icon for the main press button, reflecting what a short press does
+/// next from the current state (record / finish-and-loop / pause /
+/// resume) - or a trash icon while a long-press-clear is actively being
+/// held, confirming the clear that just fired.
+pub fn press_button_icon(state: LoopState, long_press_active: bool) -> &'static str {
+    if long_press_active {
+        return "🗑";
+    }
+    match state {
+        LoopState::Idle => "⏺",
+        LoopState::Recording => "⏹",
+        LoopState::Looping => "⏸",
+        LoopState::Stopped => "▶",
+    }
+}
+
 /// Colored state circle + label + loop duration / progress, per the
 /// visual-feedback table in PLAN.md. `loop_duration_secs` is the recorded
 /// loop's length in seconds (0.0 if empty); `progress_fraction` is the

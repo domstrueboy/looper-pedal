@@ -84,6 +84,24 @@ fn can_short_press_again_after_a_short_press() {
 }
 
 #[test]
+fn is_long_press_active_only_between_firing_and_release() {
+    let mut input = InputHandler::new();
+    let t0 = Instant::now();
+
+    input.update(true, t0);
+    assert!(!input.is_long_press_active());
+
+    input.update(true, t0 + Duration::from_millis(2001));
+    assert!(input.is_long_press_active());
+
+    input.update(true, t0 + Duration::from_millis(2500));
+    assert!(input.is_long_press_active());
+
+    input.update(false, t0 + Duration::from_millis(2600));
+    assert!(!input.is_long_press_active());
+}
+
+#[test]
 fn can_press_again_after_a_long_press_clear() {
     let mut input = InputHandler::new();
     let t0 = Instant::now();

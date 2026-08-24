@@ -66,6 +66,16 @@ pub fn input_channel_count(device_name: &str) -> Result<u16, String> {
     Ok(config.channels())
 }
 
+/// Convenience wrapper over `supported_sample_rates` + `input_channel_count`
+/// for the settings screen, which always needs both together and falls back
+/// to empty/zero on either failing rather than surfacing the error.
+pub fn rates_and_channels(device_name: &str) -> (Vec<u32>, u16) {
+    (
+        supported_sample_rates(device_name).unwrap_or_default(),
+        input_channel_count(device_name).unwrap_or(0),
+    )
+}
+
 /// Finds `device_name` and negotiates an input/output config at
 /// `sample_rate`, asserting the i32 format this project is built around
 /// (the Audient iD4 MkII's native format). Returns a descriptive error

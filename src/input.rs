@@ -27,6 +27,14 @@ impl InputHandler {
         }
     }
 
+    /// True once a hold has crossed the long-press threshold and is still
+    /// being held (i.e. after the frame that returned `LongPressClear`,
+    /// until release) - for UI feedback confirming the clear that just
+    /// fired, distinct from the one-shot `LongPressClear` event itself.
+    pub fn is_long_press_active(&self) -> bool {
+        self.pressed_at.is_some() && self.long_press_fired
+    }
+
     /// Call once per frame with whether the button/key is currently held
     /// down and the current time.
     pub fn update(&mut self, is_down: bool, now: Instant) -> InputEvent {

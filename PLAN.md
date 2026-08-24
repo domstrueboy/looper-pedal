@@ -176,11 +176,157 @@ Small, ordered, each one runnable/verifiable before moving to the next.
 
 - Trim loop start/end
 - Undo (separate from full clear)
-- Overdub
+- Overdub — recorded as separate removable/mute-able layers rather than
+  mixed into one buffer (see "Overdub as layers" under v3 below); the
+  layer abstraction is shared with the v3 multitrack idea, so worth
+  building once, generically, instead of solving overdub and multitrack
+  separately
+- Loop playback volume — a Settings control, 0-200% gain applied to the
+  loop signal in the mix step (not the live dry passthrough)
 - NAM model loading (insert-effect stage)
 - Save loop to file
 - Tempo sync / metronome
 - Waveform rendering
+
+## UI/framework decoupling (before or alongside v2 UI growth)
+
+Today `main.rs` mixes screen state, input handling, and egui rendering
+together. Before adding more screens (waveform, trim handles, a
+per-layer track list), split a thin view-model out of the egui-specific
+rendering:
+
+- `Screen`/`SettingsState`/`LooperState` become plain data + methods
+  (`press()`, `select_device()`, `start()`, ...) with no `egui::` types
+  in them.
+- `ui/*.rs` functions stay pure `fn render(ui: &mut egui::Ui, model: &Model) -> Option<Action>`
+  - the pattern `state_indicator` already follows.
+
+This buys cheap framework-independence (egui -> another native Rust GUI
+lib, if ever wanted) without committing to anything. It does **not** buy
+a web port on its own - see below.
+
+### Can this run on the web?
+
+Two separable questions:
+
+- **UI**: egui/eframe already supports compiling to WASM for a browser
+  target - the *rendering* code could run in a browser mostly unchanged,
+  once it's decoupled from the audio engine per above.
+- **Audio**: `cpal`'s ASIO backend is Windows-only with no browser
+  equivalent. A real "runs in the browser" looper needs a from-scratch
+  Web Audio API (AudioWorklet) engine - not a port of `engine.rs`, a
+  parallel implementation of the same state machine and buffer logic
+  against a different real-time audio API. That's a separate project,
+  not a refactor.
+- **Middle ground**, if a "web version" is ever wanted for real: keep
+  the native app as the audio engine, and build a browser page as a
+  *remote control/monitor* UI talking to it over a local socket (state +
+  meters out, button presses in) instead of doing audio in the browser
+  at all.
+
+Recommendation: do the view-model split because it's cheap and improves
+clarity regardless of platform; treat an actual browser audio engine as
+its own future project rather than a backlog item on this one.
+
+## CI/CD and other platforms (before v2)
+
+Requested before v2 work starts, alongside the review-driven fixes below.
+
+### GitHub Actions: build + release (Windows, now)
+
+Added as `.github/workflows/release.yml`: builds + tests on every push/PR,
+and on a `v*.*.*` tag, zips the release exe and attaches it to a GitHub
+Release. One real unknown, flagged in the workflow's own comments: it
+points `CPAL_ASIO_DIR` at a fresh clone of the GPLv3 ASIO SDK fallback
+(`github.com/audiosdk/asio`) rather than relying on `asio-sys`'s own
+auto-download, since that path is more likely to need something
+interactive that won't work headless. This needs a live run to confirm
+- can't be verified without pushing.
+
+*Licensing note, worth being aware of before distributing a binary to
+anyone else:* the GPLv3 ASIO SDK fallback is what CI (and anyone without
+a Steinberg license) builds against. Depending on how `asio-sys` links
+the compiled shim, that can carry GPL obligations onto the distributed
+binary. Not a concern for building/running it yourself, but worth a
+second look before treating a GitHub Release as "anyone can download
+and use this."
+
+### Other platforms - honest effort/risk read
+
+- **macOS**: moderate effort. `cpal` already has a CoreAudio backend, so
+  the main work is (1) making host selection platform-conditional
+  instead of hardcoding `HostId::Asio` in `engine.rs`'s `asio_host()`,
+  and (2) generalizing the i32-sample-format assumption baked in
+  throughout `engine.rs` (documented there as tied specifically to the
+  Audient iD4 MkII) - CoreAudio devices commonly report f32 instead.
+  Realistic to do once the UI/framework decoupling above is in place.
+- **Linux**: moderate-to-higher effort, same host-abstraction and
+  sample-format work as macOS, plus more backend fragmentation to
+  navigate (ALSA vs JACK vs PipeWire) and generally less predictable
+  low-latency behavior out of the box.
+- **Android / iOS**: a materially bigger, riskier undertaking, not just
+  "one more platform" - `cpal`'s mobile backend support is limited/less
+  battle-tested than desktop, `egui`/`eframe`'s mobile support is
+  rougher (especially iOS), and mobile OSes make the one guarantee this
+  whole app is built around - low, predictable audio latency - much
+  harder to get consistently. Recommend a small, throwaway research
+  spike (can a minimal cpal+eframe passthrough even hit usable latency
+  on a real phone?) before this goes anywhere near the backlog as a
+  planned feature, rather than assuming it's parity with a desktop port.
+
+Suggested order: Windows CI now -> macOS port -> Linux port -> mobile
+only if a spike confirms it's viable.
+
+### Auto-versioning
+
+Every push to `main` (from a human, not the bot itself) auto-bumps the
+patch version in `Cargo.toml`/`Cargo.lock`, commits it, tags it
+`vX.Y.Z`, builds the release binary against that new version, and
+publishes it as a GitHub Release - all handled by `release.yml`. A
+couple of things worth knowing:
+
+- Every commit to `main` becomes a tagged release. If that turns out to
+  be too noisy once things stabilize, the easy next step is gating it
+  behind something explicit (e.g. only bump when the commit message
+  contains a marker) rather than every push.
+- The bot commits/pushes directly to `main` using the workflow's own
+  token - this will fail if branch protection on `main` requires PR
+  review. Worth checking before the first push if that's configured.
+- Minor/major bumps are still manual - the automation only ever
+  increments the patch number, since there's no commit-message
+  convention (e.g. conventional commits) in place to infer bigger
+  bumps from.
+
+## v3: extended multitrack version (separate, still minimal)
+
+Vision: still "run and play," not a DAW. Preconfigured mic + guitar
+input tracks, ability to add a few more, metronome, drum presets, tuner
+- kept as small and single-purpose as the mini looper is today. Two
+builds are expected to coexist: `mini` (today's single-track looper,
+unchanged) and `extended` (this).
+
+- **Track abstraction**: overdub-with-layers (v2, above) and multitrack
+  are the same underlying data model - a small stack of aligned
+  buffers, each independently record/mute/delete-able, rather than one
+  flat `LoopBuffer`. Build it once as the shared abstraction both
+  features sit on top of.
+- **Metronome**: a click scheduled off sample position + BPM, mixed in
+  like a track; pure/testable scheduling logic, same style as the state
+  machine.
+- **Drum presets**: pre-recorded sample loops played back as another
+  track type (sample-backed instead of live-recorded) - reuses the
+  track abstraction rather than a separate playback path.
+- **Tuner**: pitch detection on the live input signal. Must not run
+  inside the real-time callback itself (autocorrelation/FFT cost is
+  unbounded relative to the audio budget) - publish a decimated copy of
+  input samples through a lock-free channel and analyze on a background
+  thread or per UI frame, same pattern as `SharedControl`'s existing
+  telemetry.
+- **Mini stays mini**: e.g. a Cargo workspace with a shared core crate
+  (audio engine, track/loop buffers, state machine) and two thin
+  binaries (`mini`, `extended`) that each assemble a different
+  UI/feature set on top, so the simple version never carries multitrack
+  code paths it doesn't use.
 
 ## Documentation update (after v2)
 

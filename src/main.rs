@@ -241,6 +241,18 @@ impl eframe::App for LooperPedalApp {
                 // just repaints triggered by input events.
                 ui.ctx().request_repaint();
 
+                // Underrun counts are accumulated lock-free on the audio
+                // threads and drained here instead of being logged from
+                // inside the callbacks themselves (stdio isn't real-time
+                // safe).
+                let (input_underruns, output_underruns) = state.control.take_underrun_counts();
+                if input_underruns > 0 {
+                    eprintln!("input stream fell behind {input_underruns} time(s): try increasing latency");
+                }
+                if output_underruns > 0 {
+                    eprintln!("output stream fell behind {output_underruns} time(s): try increasing latency");
+                }
+
                 let space_down = ui.ctx().input(|i| i.key_down(egui::Key::Space));
 
                 egui::Frame::default()

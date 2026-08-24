@@ -1,0 +1,117 @@
+name: Build and Release
+
+# On every push to main (from a human - see the bump step's `if`), this
+# bumps the patch version, commits + tags it, builds the release binary
+# against that new version, and publishes a GitHub Release - all in one
+# job, one run. It deliberately does NOT rely on the tag push triggering
+# a second workflow run: pushes made with the default GITHUB_TOKEN don't
+# trigger new runs (GitHub's own anti-recursion rule), so chaining
+# "push tag -> new run builds it" would silently never fire.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only for a direct push to main, and only if a human made it - the
+      # bot's own commit further down never reaches here anyway (see the
+      # note above), but this stays as an explicit guard so the intent is
+      # clear and it stays correct if the push mechanism ever changes.
+      - name: Bump patch version and tag
+        id: bump
+        if: >
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          set -euo pipefail
+          current=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          IFS='.' read -r major minor patch <<< "$current"
+          new="$major.$minor.$((patch + 1))"
+          new_tag="v$new"
+
+          git fetch --tags --quiet
+          if git rev-parse "$new_tag" >/dev/null 2>&1; then
+            echo "tag $new_tag already exists - stopping, resolve manually" >&2
+            exit 1
+          fi
+
+          sed -i "s/^version = \"$current\"/version = \"$new\"/" Cargo.toml
+
+          # Cargo.lock mirrors the root package's own version too; `cargo
+          # build --locked` below fails if it's stale, so keep it in sync
+          # by hand rather than needing a full cargo invocation just for
+          # this (which would need the ASIO SDK set up before this step).
+          awk -v old="$current" -v new="$new" '
+            /^name = "looper_pedal"$/ { found=1 }
+            found && /^version = / { sub(old, new); found=0 }
+            { print }
+          ' Cargo.lock > Cargo.lock.tmp && mv Cargo.lock.tmp Cargo.lock
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "Bump version to $new_tag"
+          git tag -a "$new_tag" -m "$new_tag"
+          git push origin HEAD:main
+          git push origin "$new_tag"
+
+          echo "tag=$new_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # asio-sys (used by cpal's "asio" feature) can auto-download the
+      # Steinberg ASIO SDK during `cargo build`, but that path may expect
+      # something interactive that won't work on a headless runner. Point
+      # it explicitly at the GPLv3 fallback copy instead (see PLAN.md).
+      - name: Fetch ASIO SDK (GPLv3 fallback)
+        shell: pwsh
+        run: git clone --depth 1 https://github.com/audiosdk/asio "${{ github.workspace }}\asio-sdk"
+
+      - name: Run tests
+        shell: pwsh
+        env:
+          CPAL_ASIO_DIR: ${{ github.workspace }}\asio-sdk
+        run: cargo test --locked
+
+      - name: Build release
+        shell: pwsh
+        env:
+          CPAL_ASIO_DIR: ${{ github.workspace }}\asio-sdk
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/release/looper_pedal.exe dist/
+          Compress-Archive -Path dist/* -DestinationPath looper-pedal-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: looper-pedal-windows-x64
+          path: looper-pedal-windows-x64.zip
+
+      - name: Create release
+        if: steps.bump.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.tag }}
+          files: looper-pedal-windows-x64.zip

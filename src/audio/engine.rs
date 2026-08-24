@@ -170,17 +170,25 @@ pub fn build_looper_streams(
         .build_input_stream(
             config.clone(),
             move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                let frames = data.len() / channels as usize;
-                for (i, frame) in data.chunks_exact(channels as usize).enumerate() {
-                    input_scratch[i] = frame[input_channel as usize];
-                }
-                let mono = &input_scratch[..frames];
+                // Bound every chunk at SCRATCH_CAPACITY frames regardless of
+                // how many frames the driver hands us in one callback - the
+                // scratch buffers are fixed-size and this is a real-time
+                // callback, so indexing past them would panic rather than
+                // gracefully degrade. In practice a callback this large
+                // never happens, but the guard is cheap.
+                for chunk in data.chunks(SCRATCH_CAPACITY * channels as usize) {
+                    let frames = chunk.len() / channels as usize;
+                    for (i, frame) in chunk.chunks_exact(channels as usize).enumerate() {
+                        input_scratch[i] = frame[input_channel as usize];
+                    }
+                    let mono = &input_scratch[..frames];
 
-                if passthrough_tx.push_slice(mono) < mono.len() {
-                    eprintln!("output stream fell behind: try increasing latency");
-                }
-                if input_control.load_state() == LoopState::Recording {
-                    recorder_tx.push_slice(mono);
+                    if passthrough_tx.push_slice(mono) < mono.len() {
+                        input_control.note_output_underrun();
+                    }
+                    if input_control.load_state() == LoopState::Recording {
+                        recorder_tx.push_slice(mono);
+                    }
                 }
             },
             stream_err_fn,
@@ -195,40 +203,44 @@ pub fn build_looper_streams(
         .build_output_stream(
             config,
             move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
-                let frames = data.len() / channels as usize;
-                let dry = &mut dry_scratch[..frames];
+                // Same chunk-bounding as the input callback - see the
+                // comment there.
+                for out in data.chunks_mut(SCRATCH_CAPACITY * channels as usize) {
+                    let frames = out.len() / channels as usize;
+                    let dry = &mut dry_scratch[..frames];
 
-                let read = passthrough_rx.pop_slice(dry);
-                if read < frames {
-                    dry[read..].fill(0);
-                    eprintln!("input stream fell behind: try increasing latency");
-                }
-
-                if output_control.take_clear_request() {
-                    loop_buffer.clear();
-                }
-
-                match output_control.load_state() {
-                    LoopState::Recording => {
-                        let n = recorder_rx.pop_slice(&mut loop_scratch[..frames]);
-                        if n > 0 {
-                            loop_buffer.write(&loop_scratch[..n]);
-                        }
+                    let read = passthrough_rx.pop_slice(dry);
+                    if read < frames {
+                        dry[read..].fill(0);
+                        output_control.note_input_underrun();
                     }
-                    LoopState::Looping => {
-                        let loop_out = &mut loop_scratch[..frames];
-                        loop_buffer.read_looped(loop_out);
-                        for (d, l) in dry.iter_mut().zip(loop_out.iter()) {
-                            *d = d.saturating_add(*l);
-                        }
-                    }
-                    LoopState::Idle | LoopState::Stopped => {}
-                }
 
-                for (frame_out, &mono_sample) in
-                    data.chunks_exact_mut(channels as usize).zip(dry.iter())
-                {
-                    frame_out.fill(mono_sample);
+                    if output_control.take_clear_request() {
+                        loop_buffer.clear();
+                    }
+
+                    match output_control.load_state() {
+                        LoopState::Recording => {
+                            let n = recorder_rx.pop_slice(&mut loop_scratch[..frames]);
+                            if n > 0 {
+                                loop_buffer.write(&loop_scratch[..n]);
+                            }
+                        }
+                        LoopState::Looping => {
+                            let loop_out = &mut loop_scratch[..frames];
+                            loop_buffer.read_looped(loop_out);
+                            for (d, l) in dry.iter_mut().zip(loop_out.iter()) {
+                                *d = d.saturating_add(*l);
+                            }
+                        }
+                        LoopState::Idle | LoopState::Stopped => {}
+                    }
+
+                    for (frame_out, &mono_sample) in
+                        out.chunks_exact_mut(channels as usize).zip(dry.iter())
+                    {
+                        frame_out.fill(mono_sample);
+                    }
                 }
 
                 output_control.publish_loop_progress(loop_buffer.len(), loop_buffer.play_pos());

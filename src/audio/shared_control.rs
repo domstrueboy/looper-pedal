@@ -13,6 +13,14 @@ pub struct SharedControl {
     // GUI's loop-duration display and playback-position progress bar.
     loop_len: AtomicUsize,
     play_pos: AtomicUsize,
+    // Underrun counters, also audio -> UI. Plain monotonic counts with no
+    // dependent data, so Relaxed is enough - unlike `state`/`play_pos`
+    // there's nothing else that needs to be ordered around them. Logging
+    // underruns is done from the UI thread instead of inside the audio
+    // callback itself, since stdio there would add I/O to a real-time
+    // callback exactly when it's already falling behind.
+    input_underruns: AtomicUsize,
+    output_underruns: AtomicUsize,
 }
 
 impl SharedControl {
@@ -22,6 +30,8 @@ impl SharedControl {
             clear_requested: AtomicBool::new(false),
             loop_len: AtomicUsize::new(0),
             play_pos: AtomicUsize::new(0),
+            input_underruns: AtomicUsize::new(0),
+            output_underruns: AtomicUsize::new(0),
         }
     }
 
@@ -67,5 +77,23 @@ impl SharedControl {
     pub(super) fn publish_loop_progress(&self, len: usize, pos: usize) {
         self.loop_len.store(len, Ordering::Release);
         self.play_pos.store(pos, Ordering::Release);
+    }
+
+    pub(super) fn note_input_underrun(&self) {
+        self.input_underruns.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(super) fn note_output_underrun(&self) {
+        self.output_underruns.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Drains the underrun counts accumulated since the last call, for the
+    /// UI thread to log. `(input, output)` - see the fields above for what
+    /// each side means.
+    pub fn take_underrun_counts(&self) -> (usize, usize) {
+        (
+            self.input_underruns.swap(0, Ordering::Relaxed),
+            self.output_underruns.swap(0, Ordering::Relaxed),
+        )
     }
 }

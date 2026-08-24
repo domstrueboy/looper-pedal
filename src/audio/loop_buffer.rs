@@ -32,6 +32,10 @@ impl LoopBuffer {
         self.len == 0
     }
 
+    pub fn play_pos(&self) -> usize {
+        self.play_pos
+    }
+
     /// Appends samples, stopping at capacity. Returns how many were
     /// actually written (less than `input.len()` once capacity is hit).
     pub fn write(&mut self, input: &[i32]) -> usize {

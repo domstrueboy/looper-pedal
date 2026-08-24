@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::{
@@ -8,66 +7,29 @@ use ringbuf::{
 };
 
 use super::loop_buffer::LoopBuffer;
+use super::shared_control::SharedControl;
 use super::state_machine::LoopState;
 
 const MAX_LOOP_SECONDS: f32 = 60.0;
 const SCRATCH_CAPACITY: usize = 32768;
+const LATENCY_MS: f32 = 8.0;
 
-/// Lock-free relay of state changes into the audio callback. The
-/// `LoopStateMachine` itself stays single-owner on the UI thread (see
-/// `main.rs`) - only the resulting state value and a one-shot clear flag
-/// cross the thread boundary, both via atomics, never a lock.
-pub struct SharedControl {
-    state: AtomicU8,
-    clear_requested: AtomicBool,
-}
-
-impl SharedControl {
-    pub fn new() -> Self {
-        Self {
-            state: AtomicU8::new(LoopState::Idle as u8),
-            clear_requested: AtomicBool::new(false),
-        }
-    }
-
-    pub fn publish_state(&self, state: LoopState) {
-        self.state.store(state as u8, Ordering::Release);
-    }
-
-    pub fn request_clear(&self) {
-        self.clear_requested.store(true, Ordering::Release);
-    }
-
-    fn load_state(&self) -> LoopState {
-        match self.state.load(Ordering::Acquire) {
-            0 => LoopState::Idle,
-            1 => LoopState::Recording,
-            2 => LoopState::Looping,
-            _ => LoopState::Stopped,
-        }
-    }
-
-    fn take_clear_request(&self) -> bool {
-        self.clear_requested.swap(false, Ordering::AcqRel)
-    }
+fn asio_host() -> cpal::Host {
+    cpal::host_from_id(cpal::HostId::Asio).expect("ASIO host unavailable")
 }
 
 pub fn list_asio_devices() {
-    let host = cpal::host_from_id(cpal::HostId::Asio).expect("ASIO host unavailable");
-
     println!("ASIO devices:");
-    for device in host.devices().expect("failed to enumerate ASIO devices") {
+    for device in asio_host().devices().expect("failed to enumerate ASIO devices") {
         println!("  - {device}");
     }
 }
 
-/// Opens the (single) ASIO device for both input and output. Input is
-/// always passed through live; recording/looping is driven by `control`,
-/// published from the UI thread. `LoopBuffer` lives exclusively inside the
-/// output callback (never shared), so no locks are needed anywhere here.
-pub fn build_looper_streams(control: Arc<SharedControl>) -> (cpal::Stream, cpal::Stream) {
-    let host = cpal::host_from_id(cpal::HostId::Asio).expect("ASIO host unavailable");
-    let device = host
+/// Finds the (single) ASIO device and negotiates a shared input/output
+/// config, asserting the i32 format this project is built around (the
+/// Audient iD4 MkII's native format).
+fn open_device_and_config() -> (cpal::Device, cpal::StreamConfig) {
+    let device = asio_host()
         .devices()
         .expect("failed to enumerate ASIO devices")
         .next()
@@ -98,9 +60,20 @@ pub fn build_looper_streams(control: Arc<SharedControl>) -> (cpal::Stream, cpal:
         config.sample_rate, config.channels, config.buffer_size
     );
 
+    (device, config)
+}
+
+/// Opens the (single) ASIO device for both input and output. Input is
+/// always passed through live; recording/looping is driven by `control`,
+/// published from the UI thread. `LoopBuffer` lives exclusively inside the
+/// output callback (never shared), so no locks are needed anywhere here.
+pub fn build_looper_streams(control: Arc<SharedControl>) -> (cpal::Stream, cpal::Stream, u32, u16) {
+    let (device, config) = open_device_and_config();
+    let sample_rate = config.sample_rate;
+    let channels = config.channels;
+
     // Headroom between the input and output callbacks, just enough to
     // absorb callback-timing jitter (not a deliberate monitoring delay).
-    const LATENCY_MS: f32 = 8.0;
     let latency_frames = (LATENCY_MS / 1_000.0) * config.sample_rate as f32;
     let latency_samples = latency_frames as usize * config.channels as usize;
 
@@ -169,6 +142,8 @@ pub fn build_looper_streams(control: Arc<SharedControl>) -> (cpal::Stream, cpal:
                     }
                     LoopState::Idle | LoopState::Stopped => {}
                 }
+
+                output_control.publish_loop_progress(loop_buffer.len(), loop_buffer.play_pos());
             },
             stream_err_fn,
             None,
@@ -180,7 +155,7 @@ pub fn build_looper_streams(control: Arc<SharedControl>) -> (cpal::Stream, cpal:
         .play()
         .expect("failed to start output stream");
 
-    (input_stream, output_stream)
+    (input_stream, output_stream, sample_rate, channels)
 }
 
 fn stream_err_fn(err: cpal::Error) {

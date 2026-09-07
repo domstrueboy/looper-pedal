@@ -5,8 +5,8 @@ use crate::looper::LooperState;
 use crate::ui::indicator;
 
 pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
-    // Long-press detection needs continuous frame updates, not just
-    // repaints triggered by input events.
+    // Long-press detection needs continuous frames, not just
+    // input-triggered repaints.
     ui.ctx().request_repaint();
 
     let mut action = None;
@@ -15,9 +15,8 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
     egui::Frame::default()
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
-            // Fixed top row - the gear stays put here regardless of the
-            // indicator's height changing below (e.g. the progress bar
-            // appearing).
+            // Fixed top row, so the gear doesn't move when the indicator
+            // grows below (e.g. the progress bar appearing).
             ui.horizontal(|ui| {
                 ui.label("Looper Pedal");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -31,8 +30,8 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
             ui.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = 10.0;
 
-                // Button and spacebar drive the exact same InputHandler,
-                // so they're always interchangeable and can't desync.
+                // Button and spacebar feed one InputHandler (see
+                // `LooperState::tick`), so they can't desync.
                 let icon =
                     indicator::press_button_icon(looper.state(), looper.is_long_press_active());
                 let button_response = ui.add_sized(
@@ -40,8 +39,8 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
                     egui::Button::new(egui::RichText::new(icon).size(32.0)).corner_radius(45),
                 );
 
-                // Latched, not just `is_pointer_button_down_on()` - see
-                // `LooperState`'s `button_held` field comment.
+                // Latched, not `is_pointer_button_down_on()` - see
+                // `button_held` in `LooperState`.
                 if button_response.is_pointer_button_down_on() {
                     looper.set_button_held(true);
                 }

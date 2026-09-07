@@ -14,8 +14,7 @@ const MAX_LOOP_SECONDS: f32 = 60.0;
 const SCRATCH_CAPACITY: usize = 32768;
 const LATENCY_MS: f32 = 8.0;
 
-// Candidate rates to offer in the settings picker; only ones the chosen
-// device actually supports (per `contains_rate`) are shown.
+// Offered in settings, filtered to what the chosen device supports.
 const CANDIDATE_SAMPLE_RATES: [u32; 5] = [44_100, 48_000, 88_200, 96_000, 192_000];
 
 fn asio_host() -> cpal::Host {
@@ -37,8 +36,7 @@ fn find_device(device_name: &str) -> Result<cpal::Device, String> {
         .ok_or_else(|| format!("ASIO device '{device_name}' not found"))
 }
 
-/// Sample rates from `CANDIDATE_SAMPLE_RATES` that `device_name` actually
-/// supports for the i32 format this project is built around.
+/// Candidate rates `device_name` actually supports, in i32.
 pub fn supported_sample_rates(device_name: &str) -> Result<Vec<u32>, String> {
     let device = find_device(device_name)?;
     let configs: Vec<_> = device
@@ -56,8 +54,7 @@ pub fn supported_sample_rates(device_name: &str) -> Result<Vec<u32>, String> {
         .collect())
 }
 
-/// Number of hardware input channels `device_name` exposes (e.g. 2 for the
-/// Audient iD4 MkII's two combo inputs), so settings can offer a picker.
+/// Hardware input channel count, so settings can offer a picker.
 pub fn input_channel_count(device_name: &str) -> Result<u16, String> {
     let device = find_device(device_name)?;
     let config = device
@@ -66,9 +63,8 @@ pub fn input_channel_count(device_name: &str) -> Result<u16, String> {
     Ok(config.channels())
 }
 
-/// Convenience wrapper over `supported_sample_rates` + `input_channel_count`
-/// for the settings screen, which always needs both together and falls back
-/// to empty/zero on either failing rather than surfacing the error.
+/// Both of the above, which the settings screen always needs together.
+/// Falls back to empty/zero rather than surfacing the error.
 pub fn rates_and_channels(device_name: &str) -> (Vec<u32>, u16) {
     (
         supported_sample_rates(device_name).unwrap_or_default(),
@@ -76,11 +72,9 @@ pub fn rates_and_channels(device_name: &str) -> (Vec<u32>, u16) {
     )
 }
 
-/// Finds `device_name` and negotiates an input/output config at
-/// `sample_rate`, asserting the i32 format this project is built around
-/// (the Audient iD4 MkII's native format). Returns a descriptive error
-/// instead of panicking, since device/rate mismatches are user-recoverable
-/// (pick a different one in settings) rather than programming errors.
+/// Negotiates an input/output config at `sample_rate`, asserting the i32
+/// format this project is built around (the iD4 MkII's native format).
+/// Errors rather than panics: mismatches are recoverable in settings.
 fn open_device_and_config(
     device_name: &str,
     sample_rate: u32,
@@ -103,10 +97,9 @@ fn open_device_and_config(
         ));
     }
 
-    // `supported_output_configs()` lists a SEPARATE entry per channel
-    // count (1, 2, 3, 4, ...) at each rate - we must match the device's
-    // full channel count explicitly, or we'd silently pick the first
-    // (lowest, e.g. mono) entry instead of opening all real channels.
+    // `supported_output_configs()` lists a SEPARATE entry per channel count
+    // at each rate, so the device's full count has to be matched explicitly
+    // or we'd silently open the first (e.g. mono) entry.
     let full_channels = input_config.channels();
     let output_configs: Vec<_> = device
         .supported_output_configs()
@@ -130,14 +123,11 @@ fn open_device_and_config(
     Ok((device, config))
 }
 
-/// Opens `device_name` at `sample_rate` for both input and output. Only
-/// `input_channel` (0-indexed) is actually captured/recorded/looped - it's
-/// treated as mono internally and duplicated equally across every output
-/// channel, so a single guitar input is centered in both ears rather than
-/// only coming out of one side. Input is always passed through live;
-/// recording/looping is driven by `control`, published from the UI thread.
-/// `LoopBuffer` lives exclusively inside the output callback (never
-/// shared), so no locks are needed anywhere here.
+/// Opens `device_name` for input and output. Only `input_channel`
+/// (0-indexed) is captured, treated as mono and duplicated across every
+/// output channel; live input always passes through, recording/looping
+/// follows `control`. `LoopBuffer` lives only inside the output callback,
+/// so nothing here needs a lock.
 pub fn build_looper_streams(
     control: Arc<SharedControl>,
     device_name: &str,
@@ -154,20 +144,19 @@ pub fn build_looper_streams(
         ));
     }
 
-    // Headroom between the input and output callbacks, just enough to
-    // absorb callback-timing jitter (not a deliberate monitoring delay).
-    // Everything from here on is mono (one sample per frame).
+    // Just enough headroom between the callbacks to absorb timing jitter,
+    // not a deliberate monitoring delay. Everything below is mono.
     let latency_frames = ((LATENCY_MS / 1_000.0) * config.sample_rate as f32) as usize;
 
-    // Dry passthrough bridge (unchanged behavior from step 3, now mono).
+    // Dry passthrough bridge.
     let passthrough_ring = HeapRb::<i32>::new(latency_frames * 2);
     let (mut passthrough_tx, mut passthrough_rx) = passthrough_ring.split();
     for _ in 0..latency_frames {
         passthrough_tx.try_push(0).unwrap();
     }
 
-    // Feeds captured samples from the input callback into the output
-    // callback, which owns the LoopBuffer exclusively while Recording.
+    // Feeds captured samples to the output callback, which owns the
+    // LoopBuffer.
     let recorder_ring = HeapRb::<i32>::new(latency_frames * 2);
     let (mut recorder_tx, mut recorder_rx) = recorder_ring.split();
 
@@ -180,12 +169,9 @@ pub fn build_looper_streams(
         .build_input_stream(
             config.clone(),
             move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                // Bound every chunk at SCRATCH_CAPACITY frames regardless of
-                // how many frames the driver hands us in one callback - the
-                // scratch buffers are fixed-size and this is a real-time
-                // callback, so indexing past them would panic rather than
-                // gracefully degrade. In practice a callback this large
-                // never happens, but the guard is cheap.
+                // Bound each chunk to the fixed-size scratch buffers whatever
+                // the driver hands us: overrunning them would panic inside a
+                // real-time callback. Never happens in practice, but cheap.
                 for chunk in data.chunks(SCRATCH_CAPACITY * channels as usize) {
                     let frames = chunk.len() / channels as usize;
                     for (i, frame) in chunk.chunks_exact(channels as usize).enumerate() {
@@ -213,8 +199,7 @@ pub fn build_looper_streams(
         .build_output_stream(
             config,
             move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
-                // Same chunk-bounding as the input callback - see the
-                // comment there.
+                // Same chunk-bounding as the input callback.
                 for out in data.chunks_mut(SCRATCH_CAPACITY * channels as usize) {
                     let frames = out.len() / channels as usize;
                     let dry = &mut dry_scratch[..frames];
@@ -269,8 +254,7 @@ fn stream_err_fn(err: cpal::Error) {
     eprintln!("stream error: {err}");
 }
 
-/// Scales `samples` in place by `pct` percent (100 = unchanged), saturating
-/// rather than wrapping on overflow at high gain.
+/// Scales in place by `pct` percent (100 = unchanged), saturating.
 fn apply_gain_pct(samples: &mut [i32], pct: u32) {
     for s in samples.iter_mut() {
         let scaled = (*s as i64 * pct as i64) / 100;
@@ -278,17 +262,16 @@ fn apply_gain_pct(samples: &mut [i32], pct: u32) {
     }
 }
 
-/// Adds `loop_signal` onto `dry` in place, saturating rather than
-/// wrapping so a loud loop can't wrap a live signal around into its
-/// opposite sign.
+/// Adds `loop_signal` onto `dry` in place, saturating so a loud loop can't
+/// wrap the live signal into its opposite sign.
 fn mix_add(dry: &mut [i32], loop_signal: &[i32]) {
     for (d, l) in dry.iter_mut().zip(loop_signal.iter()) {
         *d = d.saturating_add(*l);
     }
 }
 
-/// Duplicates a mono signal equally across every output channel, so a
-/// single guitar input is centered rather than only coming out one side.
+/// Duplicates mono across every output channel, so a single input is
+/// centered rather than coming out one side only.
 fn duplicate_mono_to_channels(mono: &[i32], channels: u16, out: &mut [i32]) {
     for (frame_out, &sample) in out.chunks_exact_mut(channels as usize).zip(mono.iter()) {
         frame_out.fill(sample);

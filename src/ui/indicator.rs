@@ -1,9 +1,7 @@
 use crate::audio::state_machine::LoopState;
 
-/// Icon for the main press button, reflecting what a short press does
-/// next from the current state (record / finish-and-loop / pause /
-/// resume) - or a trash icon while a long-press-clear is actively being
-/// held, confirming the clear that just fired.
+/// Icon for the main button: what a short press does next, or a trash icon
+/// while a long-press-clear is being held.
 pub fn press_button_icon(state: LoopState, long_press_active: bool) -> &'static str {
     if long_press_active {
         return "🗑";
@@ -16,11 +14,9 @@ pub fn press_button_icon(state: LoopState, long_press_active: bool) -> &'static 
     }
 }
 
-/// Colored state circle + label + loop duration / progress, per the
-/// visual-feedback table in PLAN.md. `loop_duration_secs` is the recorded
-/// loop's length in seconds (0.0 if empty); `progress_fraction` is the
-/// current playback position through the loop (0.0-1.0), only meaningful
-/// while Looping.
+/// Colored state circle, label, and loop duration / progress.
+/// `loop_duration_secs` is 0.0 when empty; `progress_fraction` (0.0-1.0) is
+/// only meaningful once something is recorded.
 pub fn state_indicator(
     ui: &mut egui::Ui,
     state: LoopState,
@@ -56,9 +52,8 @@ pub fn state_indicator(
         }
         LoopState::Looping | LoopState::Stopped => {
             ui.label(format!("{loop_duration_secs:.1}s loop"));
-            // Frozen at the last playback position while Stopped, rather
-            // than disappearing - it's still meaningful (shows where
-            // playback will resume from).
+            // Frozen at the last position while Stopped rather than
+            // vanishing - it shows where playback will resume.
             ui.add(egui::ProgressBar::new(progress_fraction));
         }
     }

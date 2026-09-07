@@ -2,11 +2,10 @@ use std::time::{Duration, Instant};
 
 const LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(2000);
 
-/// Turns a raw "is the button down right now" signal into short-press vs
-/// long-press-clear events, mimicking a real pedal footswitch. Long-press
-/// fires the moment the hold crosses the threshold, while still held; a
-/// short press only fires on release, once confirmed not to be a long
-/// press.
+/// Turns "is it down right now" into short-press vs long-press-clear, like
+/// a real footswitch: long-press fires the moment the threshold is crossed,
+/// while still held; a short press fires on release, once it's known not to
+/// be a long one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputEvent {
     None,
@@ -27,16 +26,13 @@ impl InputHandler {
         }
     }
 
-    /// True once a hold has crossed the long-press threshold and is still
-    /// being held (i.e. after the frame that returned `LongPressClear`,
-    /// until release) - for UI feedback confirming the clear that just
-    /// fired, distinct from the one-shot `LongPressClear` event itself.
+    /// True from the frame `LongPressClear` fired until release - for UI
+    /// confirming the clear, distinct from the one-shot event itself.
     pub fn is_long_press_active(&self) -> bool {
         self.pressed_at.is_some() && self.long_press_fired
     }
 
-    /// Call once per frame with whether the button/key is currently held
-    /// down and the current time.
+    /// Call once per frame.
     pub fn update(&mut self, is_down: bool, now: Instant) -> InputEvent {
         if is_down {
             match self.pressed_at {

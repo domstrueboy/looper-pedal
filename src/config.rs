@@ -1,16 +1,14 @@
 use std::path::PathBuf;
 
-/// Persisted device/sample-rate/input-channel/volume choice, stored next
-/// to the executable as a small `key=value` text file - no need for a
-/// serialization crate for four fields.
+/// Persisted device/rate/input-channel/volume choice, stored next to the
+/// executable as a small `key=value` file.
 pub struct AppConfig {
     pub device_name: String,
     pub sample_rate: u32,
     /// 0-indexed input channel to capture/record/loop.
     pub input_channel: u16,
-    /// Loop playback gain, as a percentage of unity (100 = unchanged, 0 =
-    /// silent, 200 = double). Applied only to the looped signal, never the
-    /// live passthrough.
+    /// Loop playback gain as a percentage of unity (100 = unchanged).
+    /// Applied to the loop only, never the live passthrough.
     pub volume_pct: u32,
 }
 
@@ -22,9 +20,8 @@ impl AppConfig {
             .unwrap_or_else(|| PathBuf::from("looper-pedal.cfg"))
     }
 
-    /// Returns `None` if there's no saved config yet, or if it's missing
-    /// fields / malformed - either way, the caller should fall back to
-    /// showing the settings picker.
+    /// `None` if there's no config yet or it's malformed - either way the
+    /// caller falls back to the settings picker.
     pub fn load() -> Option<Self> {
         let text = std::fs::read_to_string(Self::path()).ok()?;
 

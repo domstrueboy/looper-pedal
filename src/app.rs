@@ -2,18 +2,15 @@ use crate::config::AppConfig;
 use crate::looper::LooperState;
 use crate::settings::SettingsState;
 
-/// Which screen the app is on, and the state that screen needs. Plain
-/// data: no `egui::` types here or in either of the states it holds, so
-/// the app model isn't tied to the GUI library drawing it - `main.rs` is
-/// the only place that knows eframe exists.
+/// Which screen is up, and that screen's state - plain data, no `egui::`
+/// types.
 pub enum Screen {
     Settings(SettingsState),
     Looper(LooperState),
 }
 
-/// What a rendered frame asks the app to do next. Renderers only report
-/// intent (see `ui/`); acting on it - opening the device, persisting the
-/// choice, switching screens - happens here.
+/// What a rendered frame asks the app to do next: `ui/` reports intent,
+/// `apply` acts on it.
 pub enum Action {
     Start {
         device_name: String,
@@ -29,9 +26,8 @@ pub struct App {
 }
 
 impl App {
-    /// Starts straight into the looper if there's a saved config that
-    /// still opens; otherwise shows Settings, carrying the failure so it
-    /// can say why (e.g. the interface was unplugged).
+    /// Straight into the looper if a saved config still opens, otherwise
+    /// Settings, carrying the failure so it can say why.
     pub fn new() -> Self {
         let screen = match AppConfig::load() {
             Some(cfg) => match LooperState::start(
@@ -60,9 +56,8 @@ impl App {
         }
     }
 
-    /// Opens the device and switches to the looper, persisting the choice
-    /// only once it's known to actually work. On failure the settings
-    /// screen stays put and shows the error instead.
+    /// Persists the choice only once the device is known to open; on
+    /// failure Settings stays put and shows why.
     fn start_looper(
         &mut self,
         device_name: String,

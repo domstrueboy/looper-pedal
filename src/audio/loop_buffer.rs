@@ -1,10 +1,7 @@
-/// A pre-allocated buffer for a single recorded loop. Recording appends
-/// samples sequentially up to `capacity`; playback reads them back wrapping
-/// around at the recorded length (not the capacity), so the loop repeats
-/// seamlessly regardless of how many samples were actually recorded.
-///
-/// No allocation happens outside of `new` - safe to use from a real-time
-/// audio callback.
+/// Pre-allocated buffer for one recorded loop. Recording appends up to
+/// `capacity`; playback wraps at the recorded length, not the capacity, so
+/// the loop repeats seamlessly however much was recorded. Nothing allocates
+/// outside `new`, so it's safe in a real-time callback.
 pub struct LoopBuffer {
     samples: Vec<i32>,
     len: usize,
@@ -36,8 +33,7 @@ impl LoopBuffer {
         self.play_pos
     }
 
-    /// Appends samples, stopping at capacity. Returns how many were
-    /// actually written (less than `input.len()` once capacity is hit).
+    /// Appends samples, stopping at capacity. Returns how many were written.
     pub fn write(&mut self, input: &[i32]) -> usize {
         let space = self.capacity() - self.len;
         let to_write = input.len().min(space);
@@ -46,9 +42,8 @@ impl LoopBuffer {
         to_write
     }
 
-    /// Fills `out` with samples starting from the current playback
-    /// position, wrapping around at the recorded length. Advances the
-    /// playback position across calls. No-op if nothing has been recorded.
+    /// Fills `out` from the current playback position, wrapping at the
+    /// recorded length and advancing across calls. Silence if empty.
     pub fn read_looped(&mut self, out: &mut [i32]) {
         if self.len == 0 {
             out.fill(0);
@@ -61,8 +56,7 @@ impl LoopBuffer {
         }
     }
 
-    /// Drops the recorded loop and resets playback, ready for a new
-    /// recording. Does not reallocate.
+    /// Drops the loop and resets playback. Does not reallocate.
     pub fn clear(&mut self) {
         self.len = 0;
         self.play_pos = 0;

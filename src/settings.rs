@@ -1,9 +1,8 @@
 use crate::audio::engine;
 use crate::config::AppConfig;
 
-/// State behind the settings screen: the device/rate/channel lists to
-/// choose from and what's currently selected. Plain data - the rendering
-/// of it lives in `ui/settings.rs`.
+/// State behind the settings screen: what there is to choose from and
+/// what's selected. Rendered by `ui/settings.rs`.
 pub struct SettingsState {
     pub devices: Vec<String>,
     pub selected_device: usize,
@@ -17,9 +16,8 @@ pub struct SettingsState {
 }
 
 impl SettingsState {
-    /// Pre-selects whatever was last saved (or is currently running), so
-    /// reopening settings doesn't reset your choices back to the top of
-    /// each list.
+    /// Pre-selects whatever is saved or currently running, so reopening
+    /// settings doesn't reset every list to the top.
     pub fn new(error: Option<String>) -> Self {
         let devices = engine::available_asio_devices().unwrap_or_default();
         let saved = AppConfig::load();
@@ -59,8 +57,8 @@ impl SettingsState {
         }
     }
 
-    /// Rates and channel counts are per-device, so switching device
-    /// re-queries them and drops selections that no longer apply.
+    /// Rates and channels are per-device, so a device change re-queries
+    /// them and drops selections that no longer apply.
     pub fn refresh_for_selected_device(&mut self) {
         if let Some(name) = self.devices.get(self.selected_device) {
             (self.sample_rates, self.input_channels) = engine::rates_and_channels(name);

@@ -8,11 +8,9 @@ mod ui;
 
 use app::{App, Screen};
 
-/// The only place that knows eframe/egui exists at the app level: it hands
-/// the frame to whichever screen's renderer and applies the action that
-/// comes back. Everything it drives is framework-free (see `app.rs`), so
-/// swapping egui for another native GUI library means rewriting this file
-/// and `ui/`, not the app itself.
+/// Hands each frame to a screen renderer and applies the action it returns.
+/// This and `ui/` are the only framework-aware code - swapping GUI library
+/// rewrites them, not the app.
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let action = match &mut self.screen {

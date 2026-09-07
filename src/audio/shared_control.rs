@@ -2,30 +2,24 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
 use super::state_machine::LoopState;
 
-/// Lock-free relay of state changes into the audio callback. The
-/// `LoopStateMachine` itself stays single-owner on the UI thread (see
-/// `looper.rs`) - only the resulting state value and a one-shot clear flag
-/// cross the thread boundary, both via atomics, never a lock.
+/// Lock-free relay across the UI/audio thread boundary. The state machine
+/// stays single-owner on the UI thread (`looper.rs`); only its resulting
+/// value and a one-shot clear flag cross, via atomics, never a lock.
 pub struct SharedControl {
     state: AtomicU8,
     clear_requested: AtomicBool,
-    // Telemetry flowing the other way (audio thread -> UI thread), for the
-    // GUI's loop-duration display and playback-position progress bar.
+    // Telemetry the other way, audio -> UI: duration and progress bar.
     loop_len: AtomicUsize,
     play_pos: AtomicUsize,
-    // Underrun counters, also audio -> UI. Plain monotonic counts with no
-    // dependent data, so Relaxed is enough - unlike `state`/`play_pos`
-    // there's nothing else that needs to be ordered around them. Logging
-    // underruns is done from the UI thread instead of inside the audio
-    // callback itself, since stdio there would add I/O to a real-time
-    // callback exactly when it's already falling behind.
+    // Also audio -> UI. Monotonic counts with no dependent data, so
+    // Relaxed is enough, unlike `state`/`play_pos`. Logged from the UI
+    // thread - stdio in the callback would add I/O exactly when it's
+    // already falling behind.
     input_underruns: AtomicUsize,
     output_underruns: AtomicUsize,
-    // Loop playback gain (see `AppConfig::volume_pct`) - UI -> audio, same
-    // direction as `state`. Set at construction from the saved/chosen
-    // setting; nothing currently changes it afterward, but it's plumbed as
-    // a live atomic (not a plain field on the audio side) so it can become
-    // adjustable without a restart later, the same way `state` already is.
+    // Loop playback gain, UI -> audio like `state`. A live atomic rather
+    // than a plain value on the audio side so it can become adjustable
+    // without a restart.
     volume_pct: AtomicU32,
 }
 
@@ -50,10 +44,8 @@ impl SharedControl {
         self.clear_requested.store(true, Ordering::Release);
     }
 
-    /// Recorded loop duration in seconds (0.0 if empty) and current
-    /// playback position as a 0.0-1.0 fraction through the loop. The loop
-    /// buffer is mono (one sample per frame), so just `sample_rate` is
-    /// needed - no channel count.
+    /// Loop duration in seconds (0.0 if empty) and playback position as a
+    /// 0.0-1.0 fraction. The buffer is mono, so no channel count is needed.
     pub fn loop_duration_and_progress(&self, sample_rate: u32) -> (f32, f32) {
         let loop_len = self.loop_len.load(Ordering::Acquire);
         let play_pos = self.play_pos.load(Ordering::Acquire);
@@ -98,9 +90,7 @@ impl SharedControl {
         self.output_underruns.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Drains the underrun counts accumulated since the last call, for the
-    /// UI thread to log. `(input, output)` - see the fields above for what
-    /// each side means.
+    /// Drains the counts accumulated since the last call, `(input, output)`.
     pub fn take_underrun_counts(&self) -> (usize, usize) {
         (
             self.input_underruns.swap(0, Ordering::Relaxed),

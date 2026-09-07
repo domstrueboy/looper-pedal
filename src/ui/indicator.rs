@@ -9,7 +9,7 @@ pub fn press_button_icon(state: LoopState, long_press_active: bool) -> &'static 
     match state {
         LoopState::Idle => "⏺",
         LoopState::Recording => "⏹",
-        LoopState::Looping => "⏸",
+        LoopState::Looping | LoopState::Overdubbing => "⏸",
         LoopState::Stopped => "▶",
     }
 }
@@ -27,13 +27,14 @@ pub fn state_indicator(
         LoopState::Idle => (egui::Color32::GRAY, "Empty"),
         LoopState::Recording => (egui::Color32::RED, "Recording"),
         LoopState::Looping => (egui::Color32::from_rgb(40, 200, 40), "Looping"),
+        LoopState::Overdubbing => (egui::Color32::from_rgb(255, 110, 40), "Overdubbing"),
         LoopState::Stopped => (egui::Color32::from_rgb(230, 170, 30), "Stopped"),
     };
 
     ui.horizontal(|ui| {
         let (rect, _response) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
 
-        let radius = if state == LoopState::Recording {
+        let radius = if matches!(state, LoopState::Recording | LoopState::Overdubbing) {
             // Gentle pulse while recording.
             let t = ui.input(|i| i.time) as f32;
             5.5 + 2.0 * (t * 3.0).sin().abs()
@@ -50,7 +51,7 @@ pub fn state_indicator(
         LoopState::Recording => {
             ui.label(format!("{loop_duration_secs:.1}s"));
         }
-        LoopState::Looping | LoopState::Stopped => {
+        LoopState::Looping | LoopState::Stopped | LoopState::Overdubbing => {
             ui.label(format!("{loop_duration_secs:.1}s loop"));
             // Frozen at the last position while Stopped rather than
             // vanishing - it shows where playback will resume.

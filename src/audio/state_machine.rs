@@ -1,12 +1,18 @@
 /// Mimics a classic single-footswitch looper pedal (e.g. TC Electronic
 /// Ditto): one control cycles Idle -> Recording -> Looping -> Stopped ->
 /// Looping -> ..., and a long-press clears from any state back to Idle.
+/// Overdub sits off that cycle on a control of its own, so the press
+/// cycle keeps behaving exactly as it always has.
+///
+/// The discriminants cross the thread boundary as a `u8` - see
+/// `SharedControl::load_state` - so their order is not free to change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopState {
     Idle,
     Recording,
     Looping,
     Stopped,
+    Overdubbing,
 }
 
 pub struct LoopStateMachine {
@@ -24,13 +30,25 @@ impl LoopStateMachine {
         self.state
     }
 
-    /// Short press: advances the 4-state cycle.
+    /// Short press: advances the cycle. Both playing states stop, so the
+    /// main control always means "stop" while something is playing.
     pub fn press(&mut self) {
         self.state = match self.state {
             LoopState::Idle => LoopState::Recording,
             LoopState::Recording => LoopState::Looping,
-            LoopState::Looping => LoopState::Stopped,
+            LoopState::Looping | LoopState::Overdubbing => LoopState::Stopped,
             LoopState::Stopped => LoopState::Looping,
+        };
+    }
+
+    /// The overdub control: opens a new layer over the playing loop, or
+    /// closes the one in progress. Nothing to do from any other state -
+    /// there's no loop to overdub onto.
+    pub fn toggle_overdub(&mut self) {
+        self.state = match self.state {
+            LoopState::Looping => LoopState::Overdubbing,
+            LoopState::Overdubbing => LoopState::Looping,
+            other => other,
         };
     }
 

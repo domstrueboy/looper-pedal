@@ -8,9 +8,12 @@ use super::state_machine::LoopState;
 pub struct SharedControl {
     state: AtomicU8,
     clear_requested: AtomicBool,
-    // Telemetry the other way, audio -> UI: duration and progress bar.
+    remove_layer_requested: AtomicBool,
+    // Telemetry the other way, audio -> UI: duration, progress bar, and
+    // how many layers are stacked up.
     loop_len: AtomicUsize,
     play_pos: AtomicUsize,
+    layer_count: AtomicUsize,
     // Also audio -> UI. Monotonic counts with no dependent data, so
     // Relaxed is enough, unlike `state`/`play_pos`. Logged from the UI
     // thread - stdio in the callback would add I/O exactly when it's
@@ -28,8 +31,10 @@ impl SharedControl {
         Self {
             state: AtomicU8::new(LoopState::Idle as u8),
             clear_requested: AtomicBool::new(false),
+            remove_layer_requested: AtomicBool::new(false),
             loop_len: AtomicUsize::new(0),
             play_pos: AtomicUsize::new(0),
+            layer_count: AtomicUsize::new(0),
             input_underruns: AtomicUsize::new(0),
             output_underruns: AtomicUsize::new(0),
             volume_pct: AtomicU32::new(volume_pct),
@@ -42,6 +47,15 @@ impl SharedControl {
 
     pub fn request_clear(&self) {
         self.clear_requested.store(true, Ordering::Release);
+    }
+
+    /// Drops the newest layer. One-shot, like `request_clear`.
+    pub fn request_remove_layer(&self) {
+        self.remove_layer_requested.store(true, Ordering::Release);
+    }
+
+    pub fn layer_count(&self) -> usize {
+        self.layer_count.load(Ordering::Acquire)
     }
 
     /// Loop duration in seconds (0.0 if empty) and playback position as a
@@ -65,7 +79,8 @@ impl SharedControl {
             0 => LoopState::Idle,
             1 => LoopState::Recording,
             2 => LoopState::Looping,
-            _ => LoopState::Stopped,
+            3 => LoopState::Stopped,
+            _ => LoopState::Overdubbing,
         }
     }
 
@@ -73,9 +88,14 @@ impl SharedControl {
         self.clear_requested.swap(false, Ordering::AcqRel)
     }
 
-    pub(super) fn publish_loop_progress(&self, len: usize, pos: usize) {
+    pub(super) fn take_remove_layer_request(&self) -> bool {
+        self.remove_layer_requested.swap(false, Ordering::AcqRel)
+    }
+
+    pub(super) fn publish_telemetry(&self, len: usize, pos: usize, layers: usize) {
         self.loop_len.store(len, Ordering::Release);
         self.play_pos.store(pos, Ordering::Release);
+        self.layer_count.store(layers, Ordering::Release);
     }
 
     pub(super) fn volume_pct(&self) -> u32 {

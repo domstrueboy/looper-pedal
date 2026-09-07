@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::audio::engine;
+use crate::audio::loop_stack::MAX_LAYERS;
 use crate::audio::shared_control::SharedControl;
 use crate::audio::state_machine::{LoopState, LoopStateMachine};
 use crate::input::{InputEvent, InputHandler};
@@ -63,6 +64,50 @@ impl LooperState {
         self.control.loop_duration_and_progress(self.sample_rate)
     }
 
+    pub fn layer_count(&self) -> usize {
+        self.control.layer_count()
+    }
+
+    /// Whether the overdub control would do anything: there has to be a
+    /// loop playing, and a layer left to record into.
+    pub fn can_overdub(&self) -> bool {
+        match self.state() {
+            LoopState::Looping => self.layer_count() < MAX_LAYERS,
+            LoopState::Overdubbing => true,
+            _ => false,
+        }
+    }
+
+    /// The overdub control: opens a layer over the playing loop, or
+    /// closes the one in progress.
+    pub fn toggle_overdub(&mut self) {
+        if !self.can_overdub() {
+            return;
+        }
+        self.state_machine.toggle_overdub();
+        self.control.publish_state(self.state_machine.state());
+    }
+
+    /// Only while nothing is being recorded - dropping a finished layer
+    /// mid-take would be ambiguous about which one is meant.
+    pub fn can_remove_layer(&self) -> bool {
+        self.layer_count() > 0 && matches!(self.state(), LoopState::Looping | LoopState::Stopped)
+    }
+
+    /// Drops the newest layer. Dropping the only one leaves nothing to
+    /// play, so that case is a clear and takes the state back to Idle
+    /// with it.
+    pub fn remove_last_layer(&mut self) {
+        if !self.can_remove_layer() {
+            return;
+        }
+        if self.layer_count() <= 1 {
+            self.clear();
+        } else {
+            self.control.request_remove_layer();
+        }
+    }
+
     pub fn set_button_held(&mut self, held: bool) {
         self.button_held = held;
     }
@@ -83,13 +128,15 @@ impl LooperState {
                 self.state_machine.press();
                 self.control.publish_state(self.state_machine.state());
             }
-            InputEvent::LongPressClear => {
-                self.state_machine.clear();
-                self.control.publish_state(self.state_machine.state());
-                self.control.request_clear();
-            }
+            InputEvent::LongPressClear => self.clear(),
             InputEvent::None => {}
         }
+    }
+
+    fn clear(&mut self) {
+        self.state_machine.clear();
+        self.control.publish_state(self.state_machine.state());
+        self.control.request_clear();
     }
 
     /// Drained and logged here rather than in the callbacks, since stdio

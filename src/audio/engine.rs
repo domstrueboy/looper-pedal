@@ -6,7 +6,7 @@ use ringbuf::{
     traits::{Consumer, Producer, Split},
 };
 
-use super::loop_buffer::LoopBuffer;
+use super::loop_stack::LoopStack;
 use super::shared_control::SharedControl;
 use super::state_machine::LoopState;
 
@@ -161,7 +161,10 @@ pub fn build_looper_streams(
     let (mut recorder_tx, mut recorder_rx) = recorder_ring.split();
 
     let loop_capacity = (MAX_LOOP_SECONDS * config.sample_rate as f32) as usize;
-    let mut loop_buffer = LoopBuffer::new(loop_capacity);
+    let mut stack = LoopStack::new(loop_capacity);
+    // The callback only ever sees the published state, so layer
+    // bookkeeping keys off it changing - see `apply_state_change`.
+    let mut previous_state = LoopState::Idle;
 
     let input_control = Arc::clone(&control);
     let mut input_scratch = vec![0i32; SCRATCH_CAPACITY];
@@ -182,7 +185,10 @@ pub fn build_looper_streams(
                     if passthrough_tx.push_slice(mono) < mono.len() {
                         input_control.note_output_underrun();
                     }
-                    if input_control.load_state() == LoopState::Recording {
+                    if matches!(
+                        input_control.load_state(),
+                        LoopState::Recording | LoopState::Overdubbing
+                    ) {
                         recorder_tx.push_slice(mono);
                     }
                 }
@@ -195,6 +201,7 @@ pub fn build_looper_streams(
     let output_control = control;
     let mut dry_scratch = vec![0i32; SCRATCH_CAPACITY];
     let mut loop_scratch = vec![0i32; SCRATCH_CAPACITY];
+    let mut record_scratch = vec![0i32; SCRATCH_CAPACITY];
     let output_stream = device
         .build_output_stream(
             config,
@@ -210,20 +217,39 @@ pub fn build_looper_streams(
                         output_control.note_input_underrun();
                     }
 
-                    if output_control.take_clear_request() {
-                        loop_buffer.clear();
+                    let state = output_control.load_state();
+                    if state != previous_state {
+                        apply_state_change(&mut stack, previous_state, state);
+                        previous_state = state;
                     }
 
-                    match output_control.load_state() {
+                    if output_control.take_clear_request() {
+                        stack.clear();
+                    }
+                    if output_control.take_remove_layer_request() {
+                        stack.remove_last_layer();
+                    }
+
+                    match state {
                         LoopState::Recording => {
-                            let n = recorder_rx.pop_slice(&mut loop_scratch[..frames]);
+                            let n = recorder_rx.pop_slice(&mut record_scratch[..frames]);
                             if n > 0 {
-                                loop_buffer.write(&loop_scratch[..n]);
+                                stack.record_first_layer(&record_scratch[..n]);
                             }
                         }
-                        LoopState::Looping => {
+                        LoopState::Looping | LoopState::Overdubbing => {
                             let loop_out = &mut loop_scratch[..frames];
-                            loop_buffer.read_looped(loop_out);
+                            if state == LoopState::Overdubbing {
+                                let recorded = &mut record_scratch[..frames];
+                                let n = recorder_rx.pop_slice(recorded);
+                                // A short read means the input fell behind;
+                                // record the gap as silence rather than
+                                // shifting everything after it out of time.
+                                recorded[n..].fill(0);
+                                stack.read_mixed_with_overdub(loop_out, recorded);
+                            } else {
+                                stack.read_mixed(loop_out);
+                            }
                             apply_gain_pct(loop_out, output_control.volume_pct());
                             mix_add(dry, loop_out);
                         }
@@ -233,7 +259,11 @@ pub fn build_looper_streams(
                     duplicate_mono_to_channels(dry, channels, out);
                 }
 
-                output_control.publish_loop_progress(loop_buffer.len(), loop_buffer.play_pos());
+                output_control.publish_telemetry(
+                    stack.len(),
+                    stack.play_pos(),
+                    stack.layer_count(),
+                );
             },
             stream_err_fn,
             None,
@@ -248,6 +278,24 @@ pub fn build_looper_streams(
         .map_err(|e| format!("failed to start output stream: {e}"))?;
 
     Ok((input_stream, output_stream, sample_rate))
+}
+
+/// Layer bookkeeping that has to happen exactly when the state changes
+/// rather than on every callback: fixing the loop length once the first
+/// recording ends, and opening or closing an overdub layer.
+fn apply_state_change(stack: &mut LoopStack, from: LoopState, to: LoopState) {
+    match from {
+        LoopState::Recording => stack.finish_first_layer(),
+        LoopState::Overdubbing => stack.finish_overdub(),
+        _ => {}
+    }
+    match to {
+        LoopState::Recording => stack.begin_first_layer(),
+        LoopState::Overdubbing => {
+            stack.begin_overdub();
+        }
+        _ => {}
+    }
 }
 
 fn stream_err_fn(err: cpal::Error) {

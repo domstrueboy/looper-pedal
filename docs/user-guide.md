@@ -1,8 +1,9 @@
 # Looper Pedal - User Guide
 
 A simple looper pedal for practicing guitar, replacing a hardware looper
-like the TC Electronic Ditto. One control, one track, no overdub - press
-to record, press to loop, press to stop, hold to clear.
+like the TC Electronic Ditto. One main control - press to record, press
+to loop, press to stop, hold to clear - plus overdub, for stacking a few
+layers on top of the loop.
 
 ## First run
 
@@ -43,8 +44,34 @@ The colored dot shows what's happening:
 - **Red** (pulsing) - Recording, with elapsed time shown
 - **Green** - Looping, with the loop's length and a progress bar showing
   where in the loop you currently are
+- **Orange** (pulsing) - Overdubbing a new layer over the playing loop
 - **Amber** - Stopped, loop length still shown, progress bar frozen where
   it left off
+
+## Overdubbing
+
+Once a loop is playing, press **O** (or the **Overdub** button) to start
+layering on top of it. Whatever you play is added to the loop; press
+**O** again to finish that layer. You can stack up to **4 layers**
+including the first recording, and the counter under the buttons shows
+where you are.
+
+A few things worth knowing:
+
+- You won't hear the layer you're currently playing come back at you
+  while you play it - you're already hearing yourself live. It joins the
+  loop from the next time around.
+- Keep playing past the end of the loop and it keeps adding to the same
+  layer, so you can build something up over a couple of passes without
+  erasing what you already put down.
+- You don't have to start at the top of the loop. Start wherever you
+  like, stop whenever you like - only the part you played is recorded.
+- **Remove last** drops the most recent layer if you're not happy with
+  it, leaving the others playing. Dropping the only remaining layer
+  clears the loop.
+- Pressing the main control (space or the round button) while
+  overdubbing stops playback, exactly as it does while looping. The
+  layer you were recording is kept.
 
 ## Changing settings later
 
@@ -55,5 +82,5 @@ remembers your current choice, so you're not starting from scratch.
 ## Not yet supported
 
 This is an early, minimal version. Not (yet) included: trimming the
-start/end of a loop, undo, overdubbing multiple layers, amp modeling
-(NAM), saving loops to a file, or a metronome/tempo sync.
+start/end of a loop, muting individual layers, amp modeling (NAM),
+saving loops to a file, or a metronome/tempo sync.

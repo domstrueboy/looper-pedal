@@ -1,6 +1,8 @@
 use std::time::Instant;
 
 use crate::app::Action;
+use crate::audio::loop_stack::MAX_LAYERS;
+use crate::audio::state_machine::LoopState;
 use crate::looper::LooperState;
 use crate::ui::indicator;
 
@@ -10,7 +12,14 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
     ui.ctx().request_repaint();
 
     let mut action = None;
-    let space_down = ui.ctx().input(|i| i.key_down(egui::Key::Space));
+    let (space_down, overdub_pressed) = ui.ctx().input(|i| {
+        (
+            i.key_down(egui::Key::Space),
+            // Edge-triggered, unlike the main control: overdub has no
+            // long-press meaning, so there's nothing to time.
+            i.key_pressed(egui::Key::O),
+        )
+    });
 
     egui::Frame::default()
         .inner_margin(egui::Margin::same(16))
@@ -53,8 +62,32 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
                 ui.add_space(4.0);
                 let (duration_secs, progress_fraction) = looper.loop_duration_and_progress();
                 indicator::state_indicator(ui, looper.state(), duration_secs, progress_fraction);
+
+                ui.horizontal(|ui| {
+                    let overdub_label = if looper.state() == LoopState::Overdubbing {
+                        "Finish overdub"
+                    } else {
+                        "Overdub (O)"
+                    };
+                    let overdub_clicked = ui
+                        .add_enabled(looper.can_overdub(), egui::Button::new(overdub_label))
+                        .clicked();
+                    if overdub_clicked || overdub_pressed {
+                        looper.toggle_overdub();
+                    }
+
+                    if ui
+                        .add_enabled(looper.can_remove_layer(), egui::Button::new("Remove last"))
+                        .clicked()
+                    {
+                        looper.remove_last_layer();
+                    }
+                });
+                ui.label(format!("Layers: {}/{}", looper.layer_count(), MAX_LAYERS));
+
                 ui.add_space(4.0);
-                ui.label("Space or button: cycle record/loop/stop  |  hold ~2s: clear");
+                ui.label("Space or button: record / loop / stop");
+                ui.label("O: overdub   |   hold ~2s: clear");
             });
         });
 

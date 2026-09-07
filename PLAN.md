@@ -50,12 +50,19 @@ README's module layout.
 Step numbers below stay fixed as items land - they're cross-referenced
 throughout this file.
 
-### 2. Overdub as removable layers
+### 2. Overdub as removable layers - done
 
-Not one flat `LoopBuffer` but a small stack of aligned buffers, each
-independently record/mute/delete-able. This is the same data model v3's
-multitrack needs, so build it once, generically, instead of solving
-overdub and multitrack separately.
+`LoopStack` replaced the flat `LoopBuffer`: the first recording fixes the
+loop length and each overdub adds an aligned layer on top, up to
+`MAX_LAYERS` (4), played back as their sum. The newest layer can be
+dropped again. Overdub is on its own control (`O` / a button) rather than
+in the press cycle, so nothing about the existing cycle changed - see
+README's state machine and layers sections.
+
+Per-layer **mute** is the one part of "record/mute/delete-able" not built:
+it needs the per-layer UI list, which the count-plus-remove-last UI
+deliberately skipped. Worth doing together with the waveform work, or
+whenever a layer list appears.
 
 ### 3. Hide the console window outside dev builds
 

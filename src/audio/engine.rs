@@ -17,19 +17,21 @@ const LATENCY_MS: f32 = 8.0;
 // Offered in settings, filtered to what the chosen device supports.
 const CANDIDATE_SAMPLE_RATES: [u32; 5] = [44_100, 48_000, 88_200, 96_000, 192_000];
 
-fn asio_host() -> cpal::Host {
-    cpal::host_from_id(cpal::HostId::Asio).expect("ASIO host unavailable")
+/// Reports rather than panics: without a console there'd be nothing to
+/// see if this failed, so the settings screen shows it instead.
+fn asio_host() -> Result<cpal::Host, String> {
+    cpal::host_from_id(cpal::HostId::Asio).map_err(|e| format!("ASIO host unavailable: {e}"))
 }
 
 pub fn available_asio_devices() -> Result<Vec<String>, String> {
-    asio_host()
+    asio_host()?
         .devices()
         .map_err(|e| format!("failed to enumerate ASIO devices: {e}"))
         .map(|devices| devices.map(|d| d.to_string()).collect())
 }
 
 fn find_device(device_name: &str) -> Result<cpal::Device, String> {
-    asio_host()
+    asio_host()?
         .devices()
         .map_err(|e| format!("failed to enumerate ASIO devices: {e}"))?
         .find(|d| d.to_string() == device_name)

@@ -1,3 +1,8 @@
+// No console window behind the app in a release build. Debug builds keep
+// theirs, which is where the underrun warnings and stream errors go - so
+// this is "dev mode only" with no runtime flag to pass.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod audio;
 mod config;

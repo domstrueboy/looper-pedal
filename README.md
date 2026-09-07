@@ -167,8 +167,15 @@ currently active.
 ```powershell
 cargo build       # compile
 cargo run         # build + launch
-cargo test        # run the unit tests (state machine, loop buffer, input handler)
+cargo test        # run the unit tests (state machine, layer stack, input handler)
 ```
+
+Debug builds are console-subsystem binaries, so `cargo run` keeps a
+terminal alongside the window - that's where the stream config, underrun
+warnings and stream errors print. Release builds set
+`windows_subsystem = "windows"` and have no console at all, which also
+means those diagnostics go nowhere; run a debug build when chasing
+audio trouble.
 
 The project targets a single specific device family (asserts an i32
 sample format), since it's built around one Audient iD4 MkII - other

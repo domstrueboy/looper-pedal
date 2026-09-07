@@ -64,17 +64,16 @@ it needs the per-layer UI list, which the count-plus-remove-last UI
 deliberately skipped. Worth doing together with the waveform work, or
 whenever a layer list appears.
 
-### 3. Hide the console window outside dev builds
+### 3. Hide the console window outside dev builds - done
 
-The black terminal behind the app UI is just cargo's default
-console-subsystem binary hosting stdout/stderr - nothing in the app
-opens it deliberately. Fix:
 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` in
-`main.rs`, so release builds get no console while `cargo run` still
-does. That's "dev mode only" with no runtime flag to pass.
+`main.rs`: the release binary is a GUI-subsystem exe with no console,
+`cargo run` still builds a console one. Verified by reading the
+subsystem field out of both binaries' PE headers (2 vs 3).
 
-Catch: it also silences the diagnostics a user could act on - the
-underrun warnings and stream errors. See Open decisions.
+`asio_host()` went with it: it used to `expect()`, and a panic before
+the window opens is invisible without a console, so it now reports and
+the settings screen shows it.
 
 ### 4. Pre-roll delay before recording
 
@@ -171,11 +170,12 @@ Worth settling before the work they block starts.
   with step 4's arming window as a count-in), or leave the drums
   free-running and keep time yourself. Recommend quantizing - decided
   before either feature is built, since both depend on it.
-- **Release-build diagnostics** - once step 3 removes the console, do
-  underrun warnings and stream errors stay debug-only (a release build
-  is then silent), or get a small in-app surface such as a status line
-  under the indicator? In-app is the better long-term answer, as its
-  own small UI task.
+- **Release-build diagnostics** - the console is gone as of step 3, so
+  underrun warnings and stream errors now reach nobody in a release
+  build. Left deliberately: the alternative is a small in-app surface
+  (a status line under the indicator), which is the better long-term
+  answer but is its own UI task. Worth doing if latency trouble ever
+  shows up away from a dev build.
 - **Mic in `mini` or `extended` only** - step 7 above, or wait for real
   tracks in v3.
 - **GPL ASIO SDK before sharing binaries** - CI builds against the

@@ -4,7 +4,7 @@ use super::state_machine::LoopState;
 
 /// Lock-free relay of state changes into the audio callback. The
 /// `LoopStateMachine` itself stays single-owner on the UI thread (see
-/// `main.rs`) - only the resulting state value and a one-shot clear flag
+/// `looper.rs`) - only the resulting state value and a one-shot clear flag
 /// cross the thread boundary, both via atomics, never a lock.
 pub struct SharedControl {
     state: AtomicU8,

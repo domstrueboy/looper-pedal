@@ -1,83 +1,7 @@
-use crate::audio::engine;
-use crate::config::AppConfig;
+use crate::app::Action;
+use crate::settings::SettingsState;
 
-pub struct SettingsState {
-    pub devices: Vec<String>,
-    pub selected_device: usize,
-    pub sample_rates: Vec<u32>,
-    pub selected_rate: usize,
-    pub input_channels: u16,
-    pub selected_input_channel: usize,
-    /// Loop playback gain, 0-200% of unity - see `AppConfig::volume_pct`.
-    pub volume_pct: u32,
-    pub error: Option<String>,
-}
-
-impl SettingsState {
-    /// Pre-selects whatever was last saved (or is currently running), so
-    /// reopening settings doesn't reset your choices back to the top of
-    /// each list.
-    pub fn new(error: Option<String>) -> Self {
-        let devices = engine::available_asio_devices().unwrap_or_default();
-        let saved = AppConfig::load();
-
-        let selected_device = saved
-            .as_ref()
-            .and_then(|cfg| devices.iter().position(|d| *d == cfg.device_name))
-            .unwrap_or(0);
-
-        let (sample_rates, input_channels) = match devices.get(selected_device) {
-            Some(name) => engine::rates_and_channels(name),
-            None => (Vec::new(), 0),
-        };
-
-        let selected_rate = saved
-            .as_ref()
-            .and_then(|cfg| sample_rates.iter().position(|&r| r == cfg.sample_rate))
-            .unwrap_or(0);
-
-        let selected_input_channel = saved
-            .as_ref()
-            .map(|cfg| cfg.input_channel as usize)
-            .filter(|&ch| ch < input_channels as usize)
-            .unwrap_or(0);
-
-        let volume_pct = saved.as_ref().map(|cfg| cfg.volume_pct).unwrap_or(100);
-
-        Self {
-            devices,
-            selected_device,
-            sample_rates,
-            selected_rate,
-            input_channels,
-            selected_input_channel,
-            volume_pct,
-            error,
-        }
-    }
-
-    fn refresh_for_selected_device(&mut self) {
-        if let Some(name) = self.devices.get(self.selected_device) {
-            (self.sample_rates, self.input_channels) = engine::rates_and_channels(name);
-            self.selected_rate = 0;
-            self.selected_input_channel = 0;
-        }
-    }
-}
-
-/// What the caller should do after a frame of the settings screen - the
-/// caller owns actually starting the looper (and persisting the choice),
-/// this module only renders and reports intent.
-pub enum SettingsAction {
-    Start {
-        device_name: String,
-        sample_rate: u32,
-        input_channel: u16,
-        volume_pct: u32,
-    },
-}
-
-pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<SettingsAction> {
+pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Action> {
     let mut action = None;
 
     egui::Frame::default()
@@ -161,7 +85,7 @@ pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Setting
 
                 ui.add_space(8.0);
                 if ui.button("Start").clicked() {
-                    action = Some(SettingsAction::Start {
+                    action = Some(Action::Start {
                         device_name: settings.devices[settings.selected_device].clone(),
                         sample_rate: settings.sample_rates[settings.selected_rate],
                         input_channel: settings.selected_input_channel as u16,

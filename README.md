@@ -43,8 +43,14 @@ handful of atomics - no mutex anywhere in the audio path.
 
 ```
 src/
-  main.rs                    app entry, screen switching (Settings <-> Looper),
-                              egui window setup, spacebar/button input wiring
+  main.rs                    eframe glue and nothing else: window setup,
+                              and handing each frame to a screen renderer
+  app.rs                     which screen is up, screen switching, and
+                              acting on what a renderer reports back
+  looper.rs                  looper-screen state: state machine, the audio
+                              relay, the live streams, per-frame tick
+  settings.rs                settings-screen state: device/rate/channel
+                              lists and what's selected
   config.rs                  persisted device/rate/input-channel choice
                               (looper-pedal.cfg next to the exe)
   input.rs                   short-press vs long-press-clear detection
@@ -57,9 +63,17 @@ src/
                               recorded loop (loop_buffer_tests.rs)
     state_machine.rs           the 4-state pedal logic, pure/no audio
                               (state_machine_tests.rs)
-  ui/
+  ui/                        rendering only - each screen is a
+                              `render(ui, model) -> Option<Action>` fn
+    looper.rs                 the looper screen
+    settings.rs               the settings screen
     indicator.rs              state circle + label + progress bar widget
 ```
+
+`app.rs`, `looper.rs` and `settings.rs` hold no `egui::` types at all, so
+the app model isn't tied to the library drawing it - `main.rs` and `ui/`
+are the only framework-aware parts. Each model file pairs with a renderer
+of the same name under `ui/`.
 
 Tests live in sibling `*_tests.rs` files (via `#[path = "..."] mod tests;`)
 rather than inline, to keep the implementation files themselves short -

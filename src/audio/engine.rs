@@ -246,11 +246,14 @@ pub fn build_looper_streams(
                                 // record the gap as silence rather than
                                 // shifting everything after it out of time.
                                 recorded[n..].fill(0);
-                                stack.read_mixed_with_overdub(loop_out, recorded);
+                                stack.read_mixed_with_overdub(
+                                    loop_out,
+                                    recorded,
+                                    output_control.volume_pct(),
+                                );
                             } else {
-                                stack.read_mixed(loop_out);
+                                stack.read_mixed(loop_out, output_control.volume_pct());
                             }
-                            apply_gain_pct(loop_out, output_control.volume_pct());
                             mix_add(dry, loop_out);
                         }
                         LoopState::Idle | LoopState::Stopped => {}
@@ -300,14 +303,6 @@ fn apply_state_change(stack: &mut LoopStack, from: LoopState, to: LoopState) {
 
 fn stream_err_fn(err: cpal::Error) {
     eprintln!("stream error: {err}");
-}
-
-/// Scales in place by `pct` percent (100 = unchanged), saturating.
-fn apply_gain_pct(samples: &mut [i32], pct: u32) {
-    for s in samples.iter_mut() {
-        let scaled = (*s as i64 * pct as i64) / 100;
-        *s = scaled.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-    }
 }
 
 /// Adds `loop_signal` onto `dry` in place, saturating so a loud loop can't

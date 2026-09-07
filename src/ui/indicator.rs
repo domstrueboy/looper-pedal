@@ -1,7 +1,9 @@
 use crate::audio::state_machine::LoopState;
 
 /// Icon for the main button: what a short press does next, or a trash icon
-/// while a long-press-clear is being held.
+/// while a long-press-clear is being held. Overdubbing shows a stop
+/// square rather than looping's pause, so the two playing states aren't
+/// only told apart by the indicator dot.
 pub fn press_button_icon(state: LoopState, long_press_active: bool) -> &'static str {
     if long_press_active {
         return "🗑";
@@ -9,7 +11,8 @@ pub fn press_button_icon(state: LoopState, long_press_active: bool) -> &'static 
     match state {
         LoopState::Idle => "⏺",
         LoopState::Recording => "⏹",
-        LoopState::Looping | LoopState::Overdubbing => "⏸",
+        LoopState::Looping => "⏸",
+        LoopState::Overdubbing => "⏹",
         LoopState::Stopped => "▶",
     }
 }

@@ -127,6 +127,19 @@ callback. Two consequences worth knowing:
 - Overdubbing past the end of the loop sums into the same layer rather
   than replacing it, so a second pass doesn't erase the first.
 
+### Layer volume
+
+There is no per-layer gain: every layer plays back at the level it was
+recorded at, and Settings' single "Loop volume" is the only control over
+them - it scales the whole stack, still leaving the live passthrough
+alone.
+
+Four stacked takes can sum past what an `i32` sample holds, so layers are
+summed in 64-bit and the loop volume is applied to that full-precision
+sum before it's clamped back down (`scale_and_clamp`). Clamping first
+would make a hot stack permanently crunchy; this way turning the loop
+volume down still recovers it.
+
 ## Settings & persistence
 
 On first run (or if the saved config no longer opens - e.g. the interface

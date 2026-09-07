@@ -6,18 +6,23 @@ use crate::audio::state_machine::LoopState;
 use crate::looper::LooperState;
 use crate::ui::indicator;
 
+/// Both secondary buttons share a size, so the row can be measured and
+/// centered without laying it out twice.
+const CONTROL_BUTTON_SIZE: [f32; 2] = [118.0, 24.0];
+
 pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
     // Long-press detection needs continuous frames, not just
     // input-triggered repaints.
     ui.ctx().request_repaint();
 
     let mut action = None;
-    let (space_down, overdub_pressed) = ui.ctx().input(|i| {
+    let (space_down, overdub_pressed, remove_pressed) = ui.ctx().input(|i| {
         (
             i.key_down(egui::Key::Space),
-            // Edge-triggered, unlike the main control: overdub has no
-            // long-press meaning, so there's nothing to time.
+            // Edge-triggered, unlike the main control: neither of these
+            // has a long-press meaning, so there's nothing to time.
             i.key_pressed(egui::Key::O),
+            i.key_pressed(egui::Key::R),
         )
     });
 
@@ -63,31 +68,58 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
                 let (duration_secs, progress_fraction) = looper.loop_duration_and_progress();
                 indicator::state_indicator(ui, looper.state(), duration_secs, progress_fraction);
 
-                ui.horizontal(|ui| {
-                    let overdub_label = if looper.state() == LoopState::Overdubbing {
-                        "Finish overdub"
-                    } else {
-                        "Overdub (O)"
-                    };
-                    let overdub_clicked = ui
-                        .add_enabled(looper.can_overdub(), egui::Button::new(overdub_label))
-                        .clicked();
-                    if overdub_clicked || overdub_pressed {
-                        looper.toggle_overdub();
-                    }
+                // Allocated at exactly the row's own width so the
+                // centering layout above can center it - a plain
+                // `horizontal` would take the full width and sit left.
+                let row = egui::vec2(
+                    CONTROL_BUTTON_SIZE[0] * 2.0 + ui.spacing().item_spacing.x,
+                    CONTROL_BUTTON_SIZE[1],
+                );
+                ui.allocate_ui_with_layout(
+                    row,
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        let overdub_label = if looper.state() == LoopState::Overdubbing {
+                            "Finish overdub"
+                        } else {
+                            "Overdub (O)"
+                        };
+                        let overdub_clicked = ui
+                            .add_enabled_ui(looper.can_overdub(), |ui| {
+                                ui.add_sized(CONTROL_BUTTON_SIZE, egui::Button::new(overdub_label))
+                            })
+                            .inner
+                            .clicked();
+                        if overdub_clicked || overdub_pressed {
+                            looper.toggle_overdub();
+                        }
 
-                    if ui
-                        .add_enabled(looper.can_remove_layer(), egui::Button::new("Remove last"))
-                        .clicked()
-                    {
-                        looper.remove_last_layer();
-                    }
-                });
-                ui.label(format!("Layers: {}/{}", looper.layer_count(), MAX_LAYERS));
+                        let remove_clicked = ui
+                            .add_enabled_ui(looper.can_remove_layer(), |ui| {
+                                ui.add_sized(
+                                    CONTROL_BUTTON_SIZE,
+                                    egui::Button::new("Remove last (R)"),
+                                )
+                            })
+                            .inner
+                            .clicked();
+                        if remove_clicked || remove_pressed {
+                            looper.remove_last_layer();
+                        }
+                    },
+                );
 
+                ui.colored_label(
+                    egui::Color32::WHITE,
+                    format!("Layers: {}/{}", looper.layer_count(), MAX_LAYERS),
+                );
+
+                // Kept to three short lines: one long one would wrap
+                // raggedly at this window width.
                 ui.add_space(4.0);
                 ui.label("Space or button: record / loop / stop");
-                ui.label("O: overdub   |   hold ~2s: clear");
+                ui.label("Hold either ~2s to clear");
+                ui.label("O: overdub   |   R: remove last");
             });
         });
 

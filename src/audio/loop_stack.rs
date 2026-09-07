@@ -176,15 +176,19 @@ impl LoopStack {
         self.recording = None;
     }
 
-    /// One playback pass: mixes every layer into `out`, advancing the
-    /// shared playback position. Silence while empty.
-    pub fn read_mixed(&mut self, out: &mut [i32]) {
+    /// One playback pass: mixes every layer into `out` at `gain_pct`
+    /// percent of unity, advancing the shared playback position. Silence
+    /// while empty.
+    ///
+    /// Layers all play at the level they were recorded at - there's no
+    /// per-layer gain - so this is the only volume control over them.
+    pub fn read_mixed(&mut self, out: &mut [i32], gain_pct: u32) {
         if self.len == 0 {
             out.fill(0);
             return;
         }
         for sample in out.iter_mut() {
-            *sample = self.mix_at(self.play_pos);
+            *sample = scale_and_clamp(self.mix_at(self.play_pos), gain_pct);
             self.play_pos = (self.play_pos + 1) % self.len;
         }
     }
@@ -195,16 +199,16 @@ impl LoopStack {
     /// player's own live signal - it comes back from the next pass on.
     /// Recording a second pass over the same layer sums into it rather
     /// than replacing it, so nothing already played is erased.
-    pub fn read_mixed_with_overdub(&mut self, out: &mut [i32], input: &[i32]) {
+    pub fn read_mixed_with_overdub(&mut self, out: &mut [i32], input: &[i32], gain_pct: u32) {
         let len = self.len;
         let Some(index) = self.recording.filter(|_| len > 0) else {
-            self.read_mixed(out);
+            self.read_mixed(out, gain_pct);
             return;
         };
 
         for (i, sample) in out.iter_mut().enumerate() {
             let pos = self.play_pos;
-            *sample = self.mix_at(pos);
+            *sample = scale_and_clamp(self.mix_at(pos), gain_pct);
 
             let recorded = input.get(i).copied().unwrap_or(0);
             let layer = &mut self.layers[index];
@@ -225,15 +229,28 @@ impl LoopStack {
     /// Every layer's contribution at `pos`, summed. The take in progress
     /// is included - only over the part of it already recorded - so a
     /// second pass hears the first one come back around.
-    fn mix_at(&self, pos: usize) -> i32 {
+    ///
+    /// Summed in 64-bit: four stacked takes can exceed what a sample
+    /// holds, and clamping that away here would make the loudness
+    /// unrecoverable. `scale_and_clamp` applies the loop volume to the
+    /// full-precision sum instead, so turning it down still rescues a hot
+    /// stack.
+    fn mix_at(&self, pos: usize) -> i64 {
         let active = match self.recording {
             Some(index) => index + 1,
             None => self.count,
         };
-        self.layers[..active].iter().fold(0i32, |sum, layer| {
-            sum.saturating_add(layer.sample_at(pos, self.len))
-        })
+        self.layers[..active]
+            .iter()
+            .map(|layer| i64::from(layer.sample_at(pos, self.len)))
+            .sum()
     }
+}
+
+/// Scales a layer sum by `gain_pct` percent (100 = unchanged) and clamps
+/// it back into a sample, saturating rather than wrapping.
+fn scale_and_clamp(sum: i64, gain_pct: u32) -> i32 {
+    (sum * i64::from(gain_pct) / 100).clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 
 #[cfg(test)]

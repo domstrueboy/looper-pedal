@@ -72,6 +72,10 @@ A few things worth knowing:
 - Pressing the main control (space or the round button) while
   overdubbing stops playback, exactly as it does while looping. The
   layer you were recording is kept.
+- Every layer plays at the level you recorded it, so play each one at
+  the volume you want it in the mix. If the stack ends up too loud
+  overall, turn **Loop volume** down in Settings - it covers the whole
+  loop at once and leaves your live signal untouched.
 
 ## Changing settings later
 

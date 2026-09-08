@@ -167,6 +167,30 @@ impl LoopStack {
         }
     }
 
+    /// Adds a layer already laid out over the whole loop, as a saved one
+    /// is. The first fixes the loop length; the rest have to match it.
+    /// For rebuilding a stack off the audio thread - false if it doesn't
+    /// fit.
+    pub fn add_layer(&mut self, samples: &[i32]) -> bool {
+        if self.is_full() || samples.is_empty() || samples.len() > self.capacity() {
+            return false;
+        }
+        if self.loop_len == 0 {
+            self.loop_len = samples.len();
+        } else if samples.len() != self.loop_len {
+            return false;
+        }
+
+        let len = self.loop_len;
+        let layer = &mut self.layers[self.count];
+        layer.samples[..len].copy_from_slice(&samples[..len]);
+        layer.start = 0;
+        layer.written = len;
+        self.count += 1;
+        self.play_pos = 0;
+        true
+    }
+
     /// Drops the newest finished layer, leaving the loop length and
     /// playback position alone so the layers underneath keep playing.
     pub fn remove_last_layer(&mut self) {

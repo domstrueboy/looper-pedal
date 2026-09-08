@@ -4,8 +4,9 @@ use std::time::{Duration, Instant};
 use crate::audio::engine;
 use crate::audio::shared_control::SharedControl;
 use crate::audio::state_machine::{LoopState, LoopStateMachine};
-use crate::config::AppConfig;
+use crate::config::{self, AppConfig};
 use crate::input::{InputEvent, InputHandler};
+use crate::loop_mirror::{self, LoopMirror};
 
 /// State behind the looper screen: the state machine (owned here, on the
 /// UI thread), the relay into the audio thread, and the live streams.
@@ -29,6 +30,9 @@ pub struct LooperState {
     /// thread out of reach - the UI needs it to show "n/max" and to know
     /// when overdubbing is still possible.
     max_layers: usize,
+    /// The loop as the UI thread sees it, which is the only copy that can
+    /// be written to disk - see `LoopMirror`.
+    mirror: LoopMirror,
     sample_rate: u32,
     _input_stream: cpal::Stream,
     _output_stream: cpal::Stream,
@@ -37,23 +41,35 @@ pub struct LooperState {
 impl LooperState {
     /// Opens the device and starts the streams, or returns why it couldn't:
     /// device/rate mismatches are user-recoverable, not bugs.
-    pub fn start(config: &AppConfig) -> Result<Self, String> {
-        let control = Arc::new(SharedControl::new(config.volume_pct));
-        let (_input_stream, _output_stream, sample_rate) =
-            engine::build_looper_streams(Arc::clone(&control), config)?;
+    pub fn start(settings: &AppConfig) -> Result<Self, String> {
+        let control = Arc::new(SharedControl::new(settings.volume_pct));
+        // Whatever was left from last time, if it still fits what's
+        // configured now.
+        let restored = loop_mirror::load(&config::loop_dir(), settings.sample_rate);
+        let streams = engine::build_looper_streams(Arc::clone(&control), settings, &restored)?;
+
+        // A restored loop is there, but silent until it's asked for.
+        let state_machine = if restored.is_empty() {
+            LoopStateMachine::new()
+        } else {
+            LoopStateMachine::stopped()
+        };
+        control.publish_state(state_machine.state());
+
         Ok(Self {
             control,
-            state_machine: LoopStateMachine::new(),
+            state_machine,
             input_handler: InputHandler::new(Duration::from_millis(u64::from(
-                config.long_press_ms,
+                settings.long_press_ms,
             ))),
             button_held: false,
-            preroll: Duration::from_millis(u64::from(config.preroll_ms)),
+            preroll: Duration::from_millis(u64::from(settings.preroll_ms)),
             armed_at: None,
-            max_layers: config.max_layers as usize,
-            sample_rate,
-            _input_stream,
-            _output_stream,
+            max_layers: settings.max_layers as usize,
+            mirror: LoopMirror::new(streams.captured, streams.sample_rate, restored),
+            sample_rate: streams.sample_rate,
+            _input_stream: streams.input,
+            _output_stream: streams.output,
         })
     }
 
@@ -116,6 +132,8 @@ impl LooperState {
             self.clear();
         } else {
             self.control.request_remove_layer();
+            self.mirror.remove_last_layer();
+            self.save_loop();
         }
     }
 
@@ -162,6 +180,26 @@ impl LooperState {
                 self.control.publish_state(self.state_machine.state());
             }
         }
+
+        if self.control.take_capture_lost() > 0 {
+            self.mirror.note_lost_samples();
+        }
+        if self.mirror.tick(
+            self.state_machine.state(),
+            self.control.loop_len(),
+            self.control.take_start(),
+        ) {
+            self.save_loop();
+        }
+    }
+
+    /// Writes the loop out, so closing the app doesn't lose it. A failure
+    /// is reported and otherwise ignored: it isn't worth interrupting
+    /// playing over.
+    fn save_loop(&self) {
+        if let Err(err) = self.mirror.save(&config::loop_dir()) {
+            eprintln!("could not save the loop: {err}");
+        }
     }
 
     /// Publishes the resulting state in the same step as changing it, so
@@ -190,6 +228,8 @@ impl LooperState {
         self.armed_at = None;
         self.control.publish_state(self.state_machine.state());
         self.control.request_clear();
+        self.mirror.clear();
+        loop_mirror::delete(&config::loop_dir());
     }
 
     /// Drained and logged here rather than in the callbacks, since stdio

@@ -14,6 +14,12 @@ pub struct SharedControl {
     loop_len: AtomicUsize,
     play_pos: AtomicUsize,
     layer_count: AtomicUsize,
+    /// Where the last overdub began, so the copy the UI thread keeps can
+    /// lay that take out in the same place.
+    take_start: AtomicUsize,
+    /// Samples that never reached the UI thread's copy, because its ring
+    /// was full. Means that copy no longer matches what's playing.
+    capture_lost: AtomicUsize,
     // Also audio -> UI. Monotonic counts with no dependent data, so
     // Relaxed is enough, unlike `state`/`play_pos`. Logged from the UI
     // thread - stdio in the callback would add I/O exactly when it's
@@ -35,6 +41,8 @@ impl SharedControl {
             loop_len: AtomicUsize::new(0),
             play_pos: AtomicUsize::new(0),
             layer_count: AtomicUsize::new(0),
+            take_start: AtomicUsize::new(0),
+            capture_lost: AtomicUsize::new(0),
             input_underruns: AtomicUsize::new(0),
             output_underruns: AtomicUsize::new(0),
             volume_pct: AtomicU32::new(volume_pct),
@@ -56,6 +64,19 @@ impl SharedControl {
 
     pub fn layer_count(&self) -> usize {
         self.layer_count.load(Ordering::Acquire)
+    }
+
+    pub fn loop_len(&self) -> usize {
+        self.loop_len.load(Ordering::Acquire)
+    }
+
+    pub fn take_start(&self) -> usize {
+        self.take_start.load(Ordering::Acquire)
+    }
+
+    /// Drains the count of samples lost since the last call.
+    pub fn take_capture_lost(&self) -> usize {
+        self.capture_lost.swap(0, Ordering::Relaxed)
     }
 
     /// Loop duration in seconds (0.0 if empty) and playback position as a
@@ -91,6 +112,14 @@ impl SharedControl {
 
     pub(super) fn take_remove_layer_request(&self) -> bool {
         self.remove_layer_requested.swap(false, Ordering::AcqRel)
+    }
+
+    pub(super) fn publish_take_start(&self, pos: usize) {
+        self.take_start.store(pos, Ordering::Release);
+    }
+
+    pub(super) fn note_capture_lost(&self, samples: usize) {
+        self.capture_lost.fetch_add(samples, Ordering::Relaxed);
     }
 
     pub(super) fn publish_telemetry(&self, len: usize, pos: usize, layers: usize) {

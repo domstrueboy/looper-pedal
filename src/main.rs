@@ -7,9 +7,11 @@ mod app;
 mod audio;
 mod config;
 mod input;
+mod loop_mirror;
 mod looper;
 mod settings;
 mod ui;
+mod wav;
 
 use app::{App, Screen};
 

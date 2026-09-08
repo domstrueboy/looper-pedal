@@ -1,0 +1,234 @@
+use std::path::{Path, PathBuf};
+
+use ringbuf::HeapCons;
+use ringbuf::traits::Consumer;
+
+use crate::audio::state_machine::LoopState;
+use crate::wav;
+
+/// More layers than any config allows, so a stale file from a bigger
+/// setting still gets cleaned up.
+const MAX_SAVED_LAYERS: usize = 16;
+
+/// One recorded take: where in the loop it began, and what was played.
+/// Saved layers come back in this shape too, already laid out from
+/// position zero.
+struct Take {
+    start: usize,
+    samples: Vec<i32>,
+}
+
+/// The UI thread's own copy of the recorded loop, kept so it can be
+/// saved: the layer stack itself lives inside the audio callback, where
+/// nothing may reach in and read it.
+///
+/// Captured samples arrive through a ring buffer - the same lock-free
+/// audio -> UI direction the telemetry uses - and takes are stored as
+/// played, only laid out into layers when saving. So this costs about
+/// what was actually recorded rather than a second full-size stack.
+pub struct LoopMirror {
+    captured: HeapCons<i32>,
+    previous_state: LoopState,
+    open_take: Option<Vec<i32>>,
+    finished: Vec<Take>,
+    /// Taken from the audio thread's telemetry rather than from how many
+    /// samples arrived here, a frame after a take ends - see `tick`.
+    loop_len: usize,
+    sample_rate: u32,
+    save_pending: bool,
+    /// Set if the ring ever overflowed: this copy no longer matches what
+    /// is playing, so it must not be written over a good save.
+    lost_samples: bool,
+}
+
+impl LoopMirror {
+    pub fn new(captured: HeapCons<i32>, sample_rate: u32, restored: Vec<Vec<i32>>) -> Self {
+        let loop_len = restored.first().map(Vec::len).unwrap_or(0);
+        Self {
+            captured,
+            previous_state: LoopState::Idle,
+            open_take: None,
+            finished: restored
+                .into_iter()
+                .map(|samples| Take { start: 0, samples })
+                .collect(),
+            loop_len,
+            sample_rate,
+            save_pending: false,
+            lost_samples: false,
+        }
+    }
+
+    /// Samples went missing on the way here, so what's mirrored is no
+    /// longer what's playing.
+    pub fn note_lost_samples(&mut self) {
+        self.lost_samples = true;
+    }
+
+    /// Call once per frame, after the state machine has been advanced.
+    /// Returns whether the loop on disk is now out of date.
+    ///
+    /// `loop_len` and `take_start` come from the audio thread's
+    /// telemetry: the length it settled on, and where the last overdub
+    /// began.
+    pub fn tick(&mut self, state: LoopState, loop_len: usize, take_start: usize) -> bool {
+        // Drain first, so samples captured just before a transition
+        // still land in the take that is ending. Anything arriving with
+        // no take open belongs to one that has already finished, and is
+        // dropped rather than corrupting the next.
+        let mut scratch = [0i32; 4096];
+        loop {
+            let n = self.captured.pop_slice(&mut scratch);
+            if n == 0 {
+                break;
+            }
+            if let Some(take) = &mut self.open_take {
+                take.extend_from_slice(&scratch[..n]);
+            }
+        }
+
+        // The audio thread fixes the loop length a callback or two after
+        // the state change that ended the take, so it's read on a later
+        // frame than the transition.
+        let mut out_of_date = false;
+        if self.save_pending {
+            self.loop_len = loop_len;
+            if self.loop_len > 0 {
+                self.save_pending = false;
+                out_of_date = true;
+            }
+        }
+
+        let capturing = matches!(state, LoopState::Recording | LoopState::Overdubbing);
+        let was_capturing = matches!(
+            self.previous_state,
+            LoopState::Recording | LoopState::Overdubbing
+        );
+
+        if capturing && !was_capturing {
+            if state == LoopState::Recording {
+                // The first take of a new loop replaces everything.
+                self.finished.clear();
+                self.loop_len = 0;
+            }
+            self.open_take = Some(Vec::new());
+        } else if was_capturing && !capturing {
+            let take = self.open_take.take().unwrap_or_default();
+            if !take.is_empty() {
+                // Overdubs begin wherever playback had reached; a first
+                // take always begins at the top.
+                let start = if self.previous_state == LoopState::Overdubbing {
+                    take_start
+                } else {
+                    0
+                };
+                self.finished.push(Take {
+                    start,
+                    samples: take,
+                });
+                self.save_pending = true;
+            }
+        }
+
+        self.previous_state = state;
+        out_of_date
+    }
+
+    pub fn remove_last_layer(&mut self) {
+        self.finished.pop();
+    }
+
+    pub fn clear(&mut self) {
+        self.finished.clear();
+        self.open_take = None;
+        self.loop_len = 0;
+        self.save_pending = false;
+    }
+
+    /// Writes every layer into `directory` as a WAV, replacing whatever
+    /// was there.
+    pub fn save(&self, directory: &Path) -> Result<(), String> {
+        if self.lost_samples {
+            return Err("captured samples were lost; leaving the saved loop alone".to_string());
+        }
+
+        std::fs::create_dir_all(directory)
+            .map_err(|e| format!("creating {}: {e}", directory.display()))?;
+        // Clear first: a shorter loop must not leave layers of a longer
+        // one behind to be loaded back alongside it.
+        delete(directory);
+
+        for (index, samples) in self.layers().iter().enumerate() {
+            wav::write(&layer_path(directory, index), samples, self.sample_rate)?;
+        }
+        Ok(())
+    }
+
+    /// Every take laid out as a layer, in order.
+    fn layers(&self) -> Vec<Vec<i32>> {
+        self.finished.iter().map(|take| self.layer(take)).collect()
+    }
+
+    /// A take laid out over the whole loop, which is how it's stored and
+    /// how the audio thread holds it.
+    ///
+    /// The first pass over a position replaces what's there and later
+    /// passes sum into it - the same rule the layer stack applies while
+    /// overdubbing, so a loop plays back the way it sounded.
+    fn layer(&self, take: &Take) -> Vec<i32> {
+        let mut layer = vec![0i32; self.loop_len];
+        if self.loop_len == 0 {
+            return layer;
+        }
+
+        for (i, &sample) in take.samples.iter().enumerate() {
+            let at = (take.start + i) % self.loop_len;
+            layer[at] = if i < self.loop_len {
+                sample
+            } else {
+                layer[at].saturating_add(sample)
+            };
+        }
+        layer
+    }
+}
+
+/// The layers of a saved loop, in order. Empty if there isn't one, if it
+/// was recorded at a different sample rate (there's no resampling), or if
+/// the files don't agree on a length.
+pub fn load(directory: &Path, sample_rate: u32) -> Vec<Vec<i32>> {
+    let mut layers: Vec<Vec<i32>> = Vec::new();
+
+    for index in 0..MAX_SAVED_LAYERS {
+        let Some((samples, rate)) = wav::read(&layer_path(directory, index)) else {
+            break;
+        };
+        if rate != sample_rate || samples.is_empty() {
+            return Vec::new();
+        }
+        if layers
+            .first()
+            .is_some_and(|first| first.len() != samples.len())
+        {
+            return Vec::new();
+        }
+        layers.push(samples);
+    }
+
+    layers
+}
+
+pub fn delete(directory: &Path) {
+    for index in 0..MAX_SAVED_LAYERS {
+        let _ = std::fs::remove_file(layer_path(directory, index));
+    }
+}
+
+/// Numbered from 1, so the filenames read the way the layer counter does.
+fn layer_path(directory: &Path, index: usize) -> PathBuf {
+    directory.join(format!("layer-{}.wav", index + 1))
+}
+
+#[cfg(test)]
+#[path = "loop_mirror_tests.rs"]
+mod tests;

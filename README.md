@@ -64,6 +64,9 @@ src/
                               embeds it as the exe's icon resource
   input.rs                   short-press vs long-press-clear detection
                               (input_tests.rs)
+  loop_mirror.rs             the UI thread's own copy of the loop, and
+                              saving it (loop_mirror_tests.rs)
+  wav.rs                     mono 32-bit PCM, by hand (wav_tests.rs)
   audio/
     engine.rs                device enumeration, config negotiation, the
                               actual cpal streams and audio callbacks
@@ -212,6 +215,49 @@ callback the fixed scratch buffers cover - about what a driver might
 hand us, not about how anyone wants the app to behave),
 `CANDIDATE_SAMPLE_RATES` (a probe list, not a choice), and the window
 and widget sizes.
+
+## Saved loops
+
+The recorded loop survives closing the app: one WAV per layer, beside the
+config -
+
+- Windows: `%APPDATA%\looper-pedal\loop\layer-1.wav`, `layer-2.wav`, ...
+
+Mono 32-bit PCM, written by hand (`wav.rs`) rather than through a
+dependency. They're deliberately ordinary files: any editor opens them,
+and the eventual "export loop" feature becomes a copy rather than a
+converter.
+
+Written whenever the loop changes, not on the way out, so a crash or a
+kill doesn't lose it. On launch the layers come back and the looper
+starts **Stopped** - the loop is there, silent until asked for. A saved
+loop is discarded rather than adapted if it was recorded at a different
+sample rate (there's no resampling) or no longer fits `max_loop_secs`
+and `max_layers`.
+
+### Why a second copy exists
+
+`LoopStack` lives inside the output callback, where nothing may reach in
+and read it - so the UI thread keeps its own copy (`loop_mirror.rs`) to
+have something it can write. The input callback pushes captured samples
+into a second ring buffer alongside the recorder's, and the UI thread
+drains it each frame. Same lock-free audio -> UI direction as the
+telemetry; no lock anywhere near the callback.
+
+Takes are stored as they were played - where each began, and the samples
+- and only laid out into full-length layers when saving, so the copy
+costs about what was recorded rather than a second full-size stack. Two
+consequences worth knowing:
+
+- **The overdub layout rule exists twice**: the audio thread applies it
+  sample by sample as it plays, the mirror applies it to a whole take at
+  once. A test asserts the two agree, because drift between them would
+  mean a loop that reloads sounding different from the one that was
+  played.
+- **If samples ever go missing** on the way to the copy (its ring
+  overflowing because the UI stalled), the save is skipped rather than
+  writing a loop that doesn't match what was heard. The count comes back
+  through `SharedControl` like the underrun counters.
 
 ## Build prerequisites (Windows)
 

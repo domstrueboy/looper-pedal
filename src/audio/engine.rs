@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::{
-    HeapRb,
+    HeapCons, HeapRb,
     traits::{Consumer, Producer, Split},
 };
 
@@ -127,15 +127,33 @@ fn open_device_and_config(
     Ok((device, config))
 }
 
+/// Seconds of captured audio the UI thread's copy can fall behind by
+/// before samples start being dropped. Generous: losing any means the
+/// recorded loop can't be saved.
+const CAPTURE_BUFFER_SECONDS: usize = 2;
+
+/// The live streams, plus the channel the UI thread reads captured
+/// samples from - it keeps its own copy of the loop, since the layer
+/// stack itself is out of reach inside the output callback.
+pub struct LooperStreams {
+    pub input: cpal::Stream,
+    pub output: cpal::Stream,
+    pub sample_rate: u32,
+    pub captured: HeapCons<i32>,
+}
+
 /// Opens the device named in `settings` for input and output. Only its
 /// chosen input channel is captured, treated as mono and duplicated
 /// across every output channel; live input always passes through,
 /// recording/looping follows `control`. `LoopStack` lives only inside the
 /// output callback, so nothing here needs a lock.
+/// `restored` seeds the layer stack with a loop saved earlier; layers
+/// that don't fit the current settings are skipped.
 pub fn build_looper_streams(
     control: Arc<SharedControl>,
     settings: &AppConfig,
-) -> Result<(cpal::Stream, cpal::Stream, u32), String> {
+    restored: &[Vec<i32>],
+) -> Result<LooperStreams, String> {
     let (device, config) = open_device_and_config(&settings.device_name, settings.sample_rate)?;
     let sample_rate = config.sample_rate;
     let channels = config.channels;
@@ -161,12 +179,22 @@ pub fn build_looper_streams(
     }
 
     // Feeds captured samples to the output callback, which owns the
-    // LoopBuffer.
+    // layer stack.
     let recorder_ring = HeapRb::<i32>::new(latency_frames * 2);
     let (mut recorder_tx, mut recorder_rx) = recorder_ring.split();
 
+    // The same samples again, for the copy the UI thread keeps so that
+    // the loop can be saved.
+    let capture_ring = HeapRb::<i32>::new(CAPTURE_BUFFER_SECONDS * config.sample_rate as usize);
+    let (mut capture_tx, capture_rx) = capture_ring.split();
+
     let loop_capacity = settings.max_loop_secs as usize * config.sample_rate as usize;
     let mut stack = LoopStack::new(loop_capacity, settings.max_layers as usize);
+    for layer in restored {
+        if !stack.add_layer(layer) {
+            break;
+        }
+    }
     // The callback only ever sees the published state, so layer
     // bookkeeping keys off it changing - see `apply_state_change`.
     let mut previous_state = LoopState::Idle;
@@ -195,6 +223,10 @@ pub fn build_looper_streams(
                         LoopState::Recording | LoopState::Overdubbing
                     ) {
                         recorder_tx.push_slice(mono);
+                        let mirrored = capture_tx.push_slice(mono);
+                        if mirrored < mono.len() {
+                            input_control.note_capture_lost(mono.len() - mirrored);
+                        }
                     }
                 }
             },
@@ -224,7 +256,7 @@ pub fn build_looper_streams(
 
                     let state = output_control.load_state();
                     if state != previous_state {
-                        apply_state_change(&mut stack, previous_state, state);
+                        apply_state_change(&mut stack, &output_control, previous_state, state);
                         previous_state = state;
                     }
 
@@ -287,13 +319,23 @@ pub fn build_looper_streams(
         .play()
         .map_err(|e| format!("failed to start output stream: {e}"))?;
 
-    Ok((input_stream, output_stream, sample_rate))
+    Ok(LooperStreams {
+        input: input_stream,
+        output: output_stream,
+        sample_rate,
+        captured: capture_rx,
+    })
 }
 
 /// Layer bookkeeping that has to happen exactly when the state changes
 /// rather than on every callback: fixing the loop length once the first
 /// recording ends, and opening or closing an overdub layer.
-fn apply_state_change(stack: &mut LoopStack, from: LoopState, to: LoopState) {
+fn apply_state_change(
+    stack: &mut LoopStack,
+    control: &SharedControl,
+    from: LoopState,
+    to: LoopState,
+) {
     match from {
         LoopState::Recording => stack.finish_first_layer(),
         LoopState::Overdubbing => stack.finish_overdub(),
@@ -302,7 +344,12 @@ fn apply_state_change(stack: &mut LoopStack, from: LoopState, to: LoopState) {
     match to {
         LoopState::Recording => stack.begin_first_layer(),
         LoopState::Overdubbing => {
-            stack.begin_overdub();
+            if stack.begin_overdub() {
+                // Where this take starts, for the UI thread's copy: it
+                // can't see the playback position the layer was aligned
+                // to otherwise.
+                control.publish_take_start(stack.play_pos());
+            }
         }
         _ => {}
     }

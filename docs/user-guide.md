@@ -105,6 +105,22 @@ A few things worth knowing:
   overall, turn **Loop volume** down in Settings - it covers the whole
   loop at once and leaves your live signal untouched.
 
+## Your loop is kept
+
+Closing the app doesn't lose the loop. Next time you open it, the loop is
+back exactly as you left it, layers and all - **stopped**, so nothing
+plays until you press. It's saved as you record rather than on the way
+out, so even a crash won't take it with it.
+
+The layers are ordinary WAV files, one per layer, next to the settings
+file (`%APPDATA%\looper-pedal\loop\` on Windows) - so you can open
+them in any audio editor, or delete them to start clean.
+
+Two things will make a saved loop *not* come back: changing the **sample
+rate**, since the recording no longer matches the device, and lowering
+**Max loop length** or **Max layers** below what the loop needs. In both
+cases it's dropped rather than mangled.
+
 ## Changing settings later
 
 Click the small **⚙** icon (top-right of the looper screen) at any time

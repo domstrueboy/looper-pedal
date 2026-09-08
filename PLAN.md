@@ -12,12 +12,16 @@ how the app is actually used.
 
 ## Status
 
-v0.1.2, MVP complete. Working today: an ASIO device / sample-rate /
-input-channel picker with persisted config, always-on live monitoring,
-the 4-state record -> loop -> stop -> resume cycle on spacebar or button,
-~2s long-press clear from any state, state indicator with loop length
-and playback position, loop playback volume, technical + user docs, and
-a Windows CI build/release pipeline. Everything below is what's left.
+**v2 is complete.** Working today: an ASIO device / sample-rate /
+input-channel picker with settings persisted as TOML in the per-user
+config directory, always-on live monitoring, the record -> loop -> stop
+-> resume cycle on spacebar or button, overdub layers on a control of
+their own with remove-last, a configurable pre-roll before recording,
+long-press clear, the loop surviving restarts as WAV layers, an app
+icon, no console window in release builds, technical + user docs, and a
+Windows CI build/release pipeline.
+
+Next is the post-v2 review below, not more features.
 
 ## Ground rules
 
@@ -97,26 +101,25 @@ and will need the callback to know.
 fields, and `AppConfig::load` defaults a missing `preroll_ms` instead of
 rejecting the file, so configs written before this still load.
 
-### 5. Preserve the loop across restarts
+### 5. Preserve the loop across restarts - done
 
-The recorded loop should survive closing the app. Not a user-facing
-save feature yet, but stored so that export later is a file copy plus
-the same writer rather than a converter: write a mono 32-bit-int PCM
-WAV (a ~15-line header, no new dependency, self-describing).
+One WAV per layer beside the config, and a copy of the loop kept on the
+UI thread to have something to write - see README's saved-loops section
+for how and why.
 
-The hard part is access, not format - `LoopBuffer` lives exclusively
-inside the output callback. Push recorded samples through a second ring
-buffer that the UI thread drains into a plain `Vec`, the same lock-free
-audio -> UI direction the existing telemetry uses; 60s of mono i32 at
-48 kHz is ~11 MB. (Snapshotting the buffer under a lock is rejected -
-no locks within reach of the callback.) Loading is the easy half:
-`build_looper_streams` takes an optional pre-filled buffer, since the
-buffer is handed to the callback at build time anyway.
+Two decisions changed while building it:
 
-Semantics: restore into `Stopped`, never auto-playing on launch.
-Discard the stored loop if its sample rate doesn't match the stream
-being opened - no resampling. Long-press-clear drops the stored copy
-too. Write on exit, not per frame.
+- **Saved when the loop changes, not on exit.** An exit hook would have
+  needed the whole loop pulled out of the audio thread in one moment,
+  which the streaming handoff can't do; saving on change is also
+  proof against a crash.
+- **Per-layer, not mixed down.** Once the UI thread holds the takes,
+  writing them separately costs nothing extra and keeps "remove last"
+  meaningful after a restart.
+
+Take layout is implemented twice - incrementally in the callback, in
+one go in the mirror - with a test asserting they agree. Worth folding
+into one implementation if a third caller ever appears.
 
 ### 6. Settings in a real config file - done
 
@@ -141,30 +144,6 @@ hold-to-clear time. Each one's default and range live together in
 file is clamped to them - see README's settings table. The screen scrolls
 now, with Start pinned below it.
 
-### 7. Mic channel, cheap subset (optional)
-
-Only worth doing if practicing with vocals is wanted before the
-extended build exists. Capture two chosen input channels instead of
-one, each with its own gain, summed to mono and recorded as a single
-loop. `LoopBuffer` stays mono and no track abstraction is needed;
-Settings grows a second channel picker and two gain sliders.
-
-Nothing stands in the way: both iD4 inputs are on the same stream and
-the input callback already receives every channel interleaved - it just
-discards all but `input_channel`. So there's no second device to open
-and no cross-device drift.
-
-Two things the single-channel path never had to face: **per-source
-monitoring** (guitar monitoring is always wanted, live mic monitoring
-often isn't - feedback, and hearing yourself dry is unpleasant), and
-**levels that differ enormously** between an instrument input and a mic
-preamp, so one shared gain isn't enough - eventually a simple input
-meter, so it can be set by eye.
-
-The full version - mic and guitar as separate tracks with independent
-record-enable, mute and level - is v3, once step 2's layer abstraction
-exists.
-
 ## Open decisions
 
 Worth settling before the work they block starts.
@@ -183,8 +162,6 @@ Worth settling before the work they block starts.
   (a status line under the indicator), which is the better long-term
   answer but is its own UI task. Worth doing if latency trouble ever
   shows up away from a dev build.
-- **Mic in `mini` or `extended` only** - step 7 above, or wait for real
-  tracks in v3.
 - **GPL ASIO SDK before sharing binaries** - CI builds against the
   GPLv3 fallback SDK, and depending on how `asio-sys` links its
   compiled shim that can carry GPL obligations onto a distributed exe.
@@ -218,6 +195,36 @@ Worth settling before the work they block starts.
   ground if ever wanted: keep this app as the audio engine and serve a
   browser page as a remote control/monitor over a local socket.
 
+## Post-v2 review, before any release
+
+A deliberate pass over the whole codebase once step 5 lands, rather
+than more features. Everything below has grown by accretion across
+seven steps; this is where it gets read as a whole for the first time.
+
+- **KISS.** Look for machinery that outgrew its problem - anything
+  that could be a plain function, a smaller type, or simply deleted.
+  Every abstraction should be paying for itself.
+- **Coupling and cohesion.** Does each module still own one thing? The
+  suspicious seams are `looper.rs` (state machine, input, telemetry,
+  pre-roll, layer mirror - it may be doing too much), `AppConfig`
+  doubling as both persistence and the engine's argument bundle, and
+  `ui/` reaching into audio types.
+- **Comments.** Same pass as before but stricter: cut anything the code
+  already says, anything that has become historical narrative, and any
+  reference to a plan step that no longer means what it did. Keep the
+  non-obvious *why* - the real-time constraints, the cpal channel-count
+  trap, the latch behind `button_held`.
+- **Relevance.** Dead settings, unused methods, tests that no longer
+  test anything real.
+- **A module diagram** (mermaid, in README) showing what talks to what -
+  which modules are framework-aware, where the thread boundary runs, and
+  which direction data crosses it. The architecture is currently only
+  described in prose, and prose hides asymmetries a picture makes
+  obvious.
+
+Worth doing *before* the v3 workspace split, since that split is easier
+to draw around modules that are already clean.
+
 ## v3: extended build
 
 Still "run and play", not a DAW: preconfigured mic + guitar tracks, a
@@ -238,6 +245,20 @@ single-purpose as the mini looper is today.
   never loaded in the callback; embed one small CC0 kit via
   `include_bytes!` to keep the single-exe property, with an optional
   folder next to the config for more.
+- **Mic channel** - the second input as a track of its own, with
+  independent record-enable, mute and level, once the track abstraction
+  is in place. Nothing stands in the way physically: both iD4 inputs
+  are on the same stream and the input callback already receives every
+  channel interleaved, it just discards all but the chosen one - so no
+  second device to open and no cross-device drift. Two things the
+  single-channel path never had to face: **per-source monitoring**
+  (guitar monitoring is always wanted, live mic monitoring often isn't -
+  feedback, and hearing yourself dry is unpleasant), and **levels that
+  differ enormously** between an instrument input and a mic preamp, so
+  one shared gain isn't enough - eventually an input meter, so it can be
+  set by eye. A cheap interim version (two channels summed to mono into
+  one loop, no track abstraction needed) was considered for v2 and
+  dropped in favour of doing it properly here.
 - **Mini stays mini** - a Cargo workspace with a shared core crate
   (audio engine, buffers, state machine) and two thin binaries (`mini`,
   `extended`) assembling different feature sets, so the simple build

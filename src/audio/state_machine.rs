@@ -32,6 +32,14 @@ impl LoopStateMachine {
         }
     }
 
+    /// A machine for a loop that was restored at startup: it exists, but
+    /// nothing plays until asked.
+    pub fn stopped() -> Self {
+        Self {
+            state: LoopState::Stopped,
+        }
+    }
+
     pub fn state(&self) -> LoopState {
         self.state
     }

@@ -39,6 +39,7 @@ const CONFIG_FILE: &str = "config.toml";
 /// The old config: a hand-rolled `key=value` file next to the
 /// executable. Read once, to migrate - see `load`.
 const LEGACY_FILE: &str = "looper-pedal.cfg";
+const LOOP_DIR: &str = "loop";
 
 /// Persisted device/rate/input-channel/volume/pre-roll choice, which
 /// doubles as the bundle of settings the looper is started with.
@@ -213,9 +214,18 @@ impl AppConfig {
 /// somewhere like Program Files; that's only the fallback for having no
 /// home directory at all.
 fn config_path() -> PathBuf {
+    app_dir().join(CONFIG_FILE)
+}
+
+/// The recorded loop, one WAV per layer, kept beside the config.
+pub fn loop_dir() -> PathBuf {
+    app_dir().join(LOOP_DIR)
+}
+
+fn app_dir() -> PathBuf {
     match directories::BaseDirs::new() {
-        Some(dirs) => dirs.config_dir().join(CONFIG_DIR).join(CONFIG_FILE),
-        None => exe_dir().join(CONFIG_FILE),
+        Some(dirs) => dirs.config_dir().join(CONFIG_DIR),
+        None => exe_dir(),
     }
 }
 

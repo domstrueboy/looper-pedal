@@ -21,7 +21,13 @@ long-press clear, the loop surviving restarts as WAV layers, an app
 icon, no console window in release builds, technical + user docs, and a
 Windows CI build/release pipeline.
 
-Next is the post-v2 review below, not more features.
+The post-v2 review below has been carried out. It found four
+correctness faults - two in the saved-loop path, two in the recording
+path - and left the module boundaries clean enough for v3's workspace
+split to be drawn around them. What it changed is in README and in the
+history; what it left open is under that heading.
+
+Next is v3, which needs ordering before it can start.
 
 ## Ground rules
 
@@ -195,42 +201,44 @@ Worth settling before the work they block starts.
   ground if ever wanted: keep this app as the audio engine and serve a
   browser page as a remote control/monitor over a local socket.
 
-## Post-v2 review, before any release
+## Post-v2 review - done
 
-A deliberate pass over the whole codebase once step 5 lands, rather
-than more features. Everything below has grown by accretion across
-seven steps; this is where it gets read as a whole for the first time.
+A deliberate read of the whole codebase, cold, before any release -
+everything in it had grown by accretion across seven steps and had
+never been read as a whole.
 
-**Do this in a fresh session, deliberately.** Whoever built the code
-remembers why every line is there, which is the one thing a reviewer
-must not have - "I remember why this is fine" is how a review of your
-own work becomes a defence of it. Reading it cold is the point: the
-places where working out the intent is hard are exactly the findings
-worth having. The brief here plus README is enough orientation.
+What it produced, in the order it landed: the saved loop is now held to
+the settings that load it and a lost-capture flag no longer disables
+saving for the session; the frame is advanced before it's drawn rather
+than part-way through; the state machine left `audio/`; the settings
+screen holds an `AppConfig` instead of a copy of one; the pre-roll
+became testable; the audio callbacks left their closures, which is what
+made the recording alignment measurable at all; recording was landing a
+whole monitoring delay ahead of the beat, and the rings were too small
+to hold one driver buffer. See the history for the reasoning on each.
 
-- **KISS.** Look for machinery that outgrew its problem - anything
-  that could be a plain function, a smaller type, or simply deleted.
-  Every abstraction should be paying for itself.
-- **Coupling and cohesion.** Does each module still own one thing? The
-  suspicious seams are `looper.rs` (state machine, input, telemetry,
-  pre-roll, layer mirror - it may be doing too much), `AppConfig`
-  doubling as both persistence and the engine's argument bundle, and
-  `ui/` reaching into audio types.
-- **Comments.** Same pass as before but stricter: cut anything the code
-  already says, anything that has become historical narrative, and any
-  reference to a plan step that no longer means what it did. Keep the
-  non-obvious *why* - the real-time constraints, the cpal channel-count
-  trap, the latch behind `button_held`.
-- **Relevance.** Dead settings, unused methods, tests that no longer
-  test anything real.
-- **A module diagram** (mermaid, in README) showing what talks to what -
-  which modules are framework-aware, where the thread boundary runs, and
-  which direction data crosses it. The architecture is currently only
-  described in prose, and prose hides asymmetries a picture makes
-  obvious.
+Still open:
 
-Worth doing *before* the v3 workspace split, since that split is easier
-to draw around modules that are already clean.
+- **The alignment fix wants confirming by ear.** `MonitorDelay` holds
+  the recorded signal back to where the monitored one is, and a test
+  measures the remaining offset as zero - but that test can't speak for
+  the driver's own input/output offset. Worth stacking four layers
+  against a click before calling it settled. The ring-sizing fix in the
+  same area wants the same pass: no underruns reported at whatever
+  latency you actually run.
+- **`looper.rs` still can't be tested.** It owns two `cpal::Stream`s, so
+  the rule that a cancelling press beats a pre-roll expiry on the same
+  frame is a comment rather than a test - only the half that lives in
+  `preroll.rs` is pinned. Its two readouts also call `Instant::now()`
+  instead of using the `now` the frame was ticked with, so they can
+  disagree with the state beside them by microseconds. Both would fall
+  out of separating the streams from the screen state - worth doing if
+  that file grows again, not for its own sake.
+- **Take layout still exists twice** - incrementally in
+  `read_mixed_with_overdub`, in one go in `LoopMirror::layer`, with a
+  test asserting they agree. Worth folding into one if a third caller
+  ever appears.
+- **Per-layer mute** is still unbuilt - see step 2.
 
 ### Load-bearing, despite appearances
 
@@ -239,6 +247,21 @@ Each one is either a bug that has already happened once or a real-time
 constraint. Check the reason before touching them - README and the
 tests cover every one.
 
+- **`MonitorDelay` in the input path** - looks like a buffer for its
+  own sake. The dry path is delayed by `latency_frames` to absorb
+  callback jitter, so a recorded signal that isn't delayed with it lands
+  that far ahead of the beat it was played against, and every layer
+  inherits the error again. Measured by a test; it read 8, 20 and 50
+  samples at the matching latency settings before the fix.
+- **Ring capacity of `latency_frames + SCRATCH_CAPACITY`** - looks
+  over-generous. It was `latency_frames * 2` with half of it prefilled,
+  which leaves room for exactly the delay: a driver buffer larger than
+  that spilled on every single callback.
+- **`loop_mirror::load` taking the whole `AppConfig`** - looks like
+  needless coupling for a file read. It's the one place that decides
+  whether a saved loop still applies, and both the layer stack and the
+  UI thread's copy are seeded from its answer. Splitting the rule lets
+  them disagree about what exists.
 - **`button_held` in `looper.rs`** - a latch, rather than asking egui
   whether the pointer is on the button. egui reads a cursor drifting off
   the button as a release, which broke long-press-clear from the button
@@ -264,10 +287,6 @@ tests cover every one.
   callback's work whatever the driver hands us. Overrunning the fixed
   scratch buffers would panic inside the real-time path.
 
-The one genuine duplicate to consider merging: take layout exists twice,
-incrementally in `read_mixed_with_overdub` and in one go in
-`LoopMirror::layer`, with a test asserting they agree.
-
 ## v3: extended build
 
 Not startable as written - it's a list of components, not an order.
@@ -279,7 +298,7 @@ Two things to settle first, at the top of a v3 session:
 - **Order the work**, the way v2 was ordered. The dependencies:
   per-layer mute finishes the track abstraction, which the mic track
   needs; one scheduler underpins the metronome, which the drum machine
-  is a richer version of; the workspace split is easiest once the
+  is a richer version of; the workspace split is easiest now that the
   review has settled the module boundaries.
 
 Still "run and play", not a DAW: preconfigured mic + guitar tracks, a

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::{
-    HeapCons, HeapRb,
+    HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Producer, Split},
 };
 
@@ -144,11 +144,215 @@ pub struct LooperStreams {
     pub captured: HeapCons<i32>,
 }
 
+/// The input half of the audio path: one interleaved buffer from the
+/// driver, reduced to the chosen channel as mono and handed to everyone
+/// who wants it.
+///
+/// A struct rather than a closure body so the path can be driven by a
+/// test - a cpal callback needs an open device, which makes anything
+/// written inside one unreachable.
+struct InputPath {
+    control: Arc<SharedControl>,
+    channels: u16,
+    input_channel: u16,
+    scratch: Vec<i32>,
+    passthrough: HeapProd<i32>,
+    recorder: HeapProd<i32>,
+    capture: HeapProd<i32>,
+}
+
+impl InputPath {
+    fn process(&mut self, data: &[i32]) {
+        // Bound each chunk to the fixed-size scratch buffer whatever the
+        // driver hands us: overrunning it would panic inside a real-time
+        // callback. Never happens in practice, but cheap.
+        for chunk in data.chunks(SCRATCH_CAPACITY * self.channels as usize) {
+            let frames = chunk.len() / self.channels as usize;
+            for (i, frame) in chunk.chunks_exact(self.channels as usize).enumerate() {
+                self.scratch[i] = frame[self.input_channel as usize];
+            }
+            let mono = &self.scratch[..frames];
+
+            // A full ring means the far side hasn't drained it, so it is
+            // the output that fell behind, not this callback.
+            if self.passthrough.push_slice(mono) < mono.len() {
+                self.control.note_output_underrun();
+            }
+            if matches!(
+                self.control.load_state(),
+                LoopState::Recording | LoopState::Overdubbing
+            ) {
+                self.recorder.push_slice(mono);
+                let mirrored = self.capture.push_slice(mono);
+                if mirrored < mono.len() {
+                    self.control.note_capture_lost(mono.len() - mirrored);
+                }
+            }
+        }
+    }
+}
+
+/// The output half: the dry signal, the loop mixed onto it, and the
+/// overdub written back. Owns `LoopStack` outright - it lives here and
+/// nowhere else, which is why nothing needs a lock to reach it.
+struct OutputPath {
+    control: Arc<SharedControl>,
+    channels: u16,
+    dry: Vec<i32>,
+    loop_out: Vec<i32>,
+    recorded: Vec<i32>,
+    passthrough: HeapCons<i32>,
+    recorder: HeapCons<i32>,
+    stack: LoopStack,
+    /// The callback only ever sees the published state, never the
+    /// transitions, so layer bookkeeping keys off this changing - see
+    /// `apply_state_change`.
+    previous_state: LoopState,
+}
+
+impl OutputPath {
+    fn process(&mut self, data: &mut [i32]) {
+        // Same chunk-bounding as the input path.
+        for out in data.chunks_mut(SCRATCH_CAPACITY * self.channels as usize) {
+            let frames = out.len() / self.channels as usize;
+            let dry = &mut self.dry[..frames];
+
+            // A short read means the input hasn't filled the ring yet,
+            // so it is the input that fell behind.
+            let read = self.passthrough.pop_slice(dry);
+            if read < frames {
+                dry[read..].fill(0);
+                self.control.note_input_underrun();
+            }
+
+            let state = self.control.load_state();
+            if state != self.previous_state {
+                apply_state_change(&mut self.stack, &self.control, self.previous_state, state);
+                self.previous_state = state;
+            }
+
+            if self.control.take_clear_request() {
+                self.stack.clear();
+            }
+            if self.control.take_remove_layer_request() {
+                self.stack.remove_last_layer();
+            }
+
+            match state {
+                LoopState::Recording => {
+                    let n = self.recorder.pop_slice(&mut self.recorded[..frames]);
+                    if n > 0 {
+                        self.stack.record_first_layer(&self.recorded[..n]);
+                    }
+                }
+                LoopState::Looping | LoopState::Overdubbing => {
+                    let loop_out = &mut self.loop_out[..frames];
+                    if state == LoopState::Overdubbing {
+                        let recorded = &mut self.recorded[..frames];
+                        let n = self.recorder.pop_slice(recorded);
+                        // A short read means the input fell behind;
+                        // record the gap as silence rather than
+                        // shifting everything after it out of time.
+                        recorded[n..].fill(0);
+                        let gain = self.control.volume_pct();
+                        self.stack.read_mixed_with_overdub(loop_out, recorded, gain);
+                    } else {
+                        self.stack.read_mixed(loop_out, self.control.volume_pct());
+                    }
+                    mix_add(dry, loop_out);
+                }
+                // Arming captures nothing - the pre-roll is still
+                // counting down on the UI thread.
+                LoopState::Idle | LoopState::Stopped | LoopState::Arming => {}
+            }
+
+            duplicate_mono_to_channels(dry, self.channels, out);
+        }
+
+        self.control.publish_telemetry(
+            self.stack.recorded_len(),
+            self.stack.play_pos(),
+            self.stack.layer_count(),
+        );
+    }
+}
+
+/// Both halves and the rings between them, built as one piece because
+/// that is where the recorded signal's alignment against the monitored
+/// signal is decided - see the prefill below.
+struct AudioPath {
+    input: InputPath,
+    output: OutputPath,
+}
+
+/// Everything downstream of the device: no cpal types, so a test can
+/// build one and push buffers through it.
+fn build_audio_path(
+    control: &Arc<SharedControl>,
+    settings: &AppConfig,
+    sample_rate: u32,
+    channels: u16,
+    restored: &[Vec<i32>],
+) -> (AudioPath, HeapCons<i32>) {
+    // Just enough headroom between the callbacks to absorb timing jitter,
+    // not a deliberate monitoring delay. Everything below is mono.
+    let latency_frames = (settings.latency_ms as usize * sample_rate as usize) / 1_000;
+
+    // Dry passthrough bridge.
+    let (mut passthrough_tx, passthrough_rx) = HeapRb::<i32>::new(latency_frames * 2).split();
+    for _ in 0..latency_frames {
+        passthrough_tx.try_push(0).unwrap();
+    }
+
+    // Feeds captured samples to the output path, which owns the layer
+    // stack.
+    let (recorder_tx, recorder_rx) = HeapRb::<i32>::new(latency_frames * 2).split();
+
+    // The same samples again, for the copy the UI thread keeps so that
+    // the loop can be saved.
+    let (capture_tx, capture_rx) =
+        HeapRb::<i32>::new(CAPTURE_BUFFER_SECONDS * sample_rate as usize).split();
+
+    let loop_capacity = settings.max_loop_secs as usize * sample_rate as usize;
+    let mut stack = LoopStack::new(loop_capacity, settings.max_layers as usize);
+    for layer in restored {
+        let added = stack.add_layer(layer);
+        // Anything `loop_mirror::load` handed back fits by construction.
+        // Dropping one quietly here would leave the UI thread's copy
+        // holding layers that aren't playing.
+        debug_assert!(added, "a restored layer should fit the settings it was loaded for");
+    }
+
+    let path = AudioPath {
+        input: InputPath {
+            control: Arc::clone(control),
+            channels,
+            input_channel: settings.input_channel,
+            scratch: vec![0i32; SCRATCH_CAPACITY],
+            passthrough: passthrough_tx,
+            recorder: recorder_tx,
+            capture: capture_tx,
+        },
+        output: OutputPath {
+            control: Arc::clone(control),
+            channels,
+            dry: vec![0i32; SCRATCH_CAPACITY],
+            loop_out: vec![0i32; SCRATCH_CAPACITY],
+            recorded: vec![0i32; SCRATCH_CAPACITY],
+            passthrough: passthrough_rx,
+            recorder: recorder_rx,
+            stack,
+            previous_state: LoopState::Idle,
+        },
+    };
+    (path, capture_rx)
+}
+
 /// Opens the device named in `settings` for input and output. Only its
 /// chosen input channel is captured, treated as mono and duplicated
 /// across every output channel; live input always passes through,
 /// recording/looping follows `control`. `LoopStack` lives only inside the
-/// output callback, so nothing here needs a lock.
+/// output path, so nothing here needs a lock.
 /// `restored` seeds the layer stack with a loop saved earlier, already
 /// held to these settings by `loop_mirror::load`.
 pub fn build_looper_streams(
@@ -159,158 +363,32 @@ pub fn build_looper_streams(
     let (device, config) = open_device_and_config(&settings.device_name, settings.sample_rate)?;
     let sample_rate = config.sample_rate;
     let channels = config.channels;
-    // Copied out of `settings` because the stream callbacks below have to
-    // own everything they use.
-    let input_channel = settings.input_channel;
-    if input_channel >= channels {
+    if settings.input_channel >= channels {
         return Err(format!(
             "input channel {} is out of range (device has {channels} channel(s))",
-            input_channel + 1
+            settings.input_channel + 1
         ));
     }
 
-    // Just enough headroom between the callbacks to absorb timing jitter,
-    // not a deliberate monitoring delay. Everything below is mono.
-    let latency_frames = (settings.latency_ms as usize * config.sample_rate as usize) / 1_000;
+    let (path, captured) = build_audio_path(&control, settings, sample_rate, channels, restored);
+    let AudioPath {
+        mut input,
+        mut output,
+    } = path;
 
-    // Dry passthrough bridge.
-    let passthrough_ring = HeapRb::<i32>::new(latency_frames * 2);
-    let (mut passthrough_tx, mut passthrough_rx) = passthrough_ring.split();
-    for _ in 0..latency_frames {
-        passthrough_tx.try_push(0).unwrap();
-    }
-
-    // Feeds captured samples to the output callback, which owns the
-    // layer stack.
-    let recorder_ring = HeapRb::<i32>::new(latency_frames * 2);
-    let (mut recorder_tx, mut recorder_rx) = recorder_ring.split();
-
-    // The same samples again, for the copy the UI thread keeps so that
-    // the loop can be saved.
-    let capture_ring = HeapRb::<i32>::new(CAPTURE_BUFFER_SECONDS * config.sample_rate as usize);
-    let (mut capture_tx, capture_rx) = capture_ring.split();
-
-    let loop_capacity = settings.max_loop_secs as usize * config.sample_rate as usize;
-    let mut stack = LoopStack::new(loop_capacity, settings.max_layers as usize);
-    for layer in restored {
-        let added = stack.add_layer(layer);
-        // Anything `loop_mirror::load` handed back fits by construction.
-        // Dropping one quietly here would leave the UI thread's copy
-        // holding layers that aren't playing.
-        debug_assert!(added, "a restored layer should fit the settings it was loaded for");
-    }
-    // The callback only ever sees the published state, so layer
-    // bookkeeping keys off it changing - see `apply_state_change`.
-    let mut previous_state = LoopState::Idle;
-
-    let input_control = Arc::clone(&control);
-    let mut input_scratch = vec![0i32; SCRATCH_CAPACITY];
     let input_stream = device
         .build_input_stream(
             config.clone(),
-            move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                // Bound each chunk to the fixed-size scratch buffers whatever
-                // the driver hands us: overrunning them would panic inside a
-                // real-time callback. Never happens in practice, but cheap.
-                for chunk in data.chunks(SCRATCH_CAPACITY * channels as usize) {
-                    let frames = chunk.len() / channels as usize;
-                    for (i, frame) in chunk.chunks_exact(channels as usize).enumerate() {
-                        input_scratch[i] = frame[input_channel as usize];
-                    }
-                    let mono = &input_scratch[..frames];
-
-                    if passthrough_tx.push_slice(mono) < mono.len() {
-                        input_control.note_output_underrun();
-                    }
-                    if matches!(
-                        input_control.load_state(),
-                        LoopState::Recording | LoopState::Overdubbing
-                    ) {
-                        recorder_tx.push_slice(mono);
-                        let mirrored = capture_tx.push_slice(mono);
-                        if mirrored < mono.len() {
-                            input_control.note_capture_lost(mono.len() - mirrored);
-                        }
-                    }
-                }
-            },
+            move |data: &[i32], _: &cpal::InputCallbackInfo| input.process(data),
             stream_err_fn,
             None,
         )
         .map_err(|e| format!("failed to build input stream: {e}"))?;
 
-    let output_control = control;
-    let mut dry_scratch = vec![0i32; SCRATCH_CAPACITY];
-    let mut loop_scratch = vec![0i32; SCRATCH_CAPACITY];
-    let mut record_scratch = vec![0i32; SCRATCH_CAPACITY];
     let output_stream = device
         .build_output_stream(
             config,
-            move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
-                // Same chunk-bounding as the input callback.
-                for out in data.chunks_mut(SCRATCH_CAPACITY * channels as usize) {
-                    let frames = out.len() / channels as usize;
-                    let dry = &mut dry_scratch[..frames];
-
-                    let read = passthrough_rx.pop_slice(dry);
-                    if read < frames {
-                        dry[read..].fill(0);
-                        output_control.note_input_underrun();
-                    }
-
-                    let state = output_control.load_state();
-                    if state != previous_state {
-                        apply_state_change(&mut stack, &output_control, previous_state, state);
-                        previous_state = state;
-                    }
-
-                    if output_control.take_clear_request() {
-                        stack.clear();
-                    }
-                    if output_control.take_remove_layer_request() {
-                        stack.remove_last_layer();
-                    }
-
-                    match state {
-                        LoopState::Recording => {
-                            let n = recorder_rx.pop_slice(&mut record_scratch[..frames]);
-                            if n > 0 {
-                                stack.record_first_layer(&record_scratch[..n]);
-                            }
-                        }
-                        LoopState::Looping | LoopState::Overdubbing => {
-                            let loop_out = &mut loop_scratch[..frames];
-                            if state == LoopState::Overdubbing {
-                                let recorded = &mut record_scratch[..frames];
-                                let n = recorder_rx.pop_slice(recorded);
-                                // A short read means the input fell behind;
-                                // record the gap as silence rather than
-                                // shifting everything after it out of time.
-                                recorded[n..].fill(0);
-                                stack.read_mixed_with_overdub(
-                                    loop_out,
-                                    recorded,
-                                    output_control.volume_pct(),
-                                );
-                            } else {
-                                stack.read_mixed(loop_out, output_control.volume_pct());
-                            }
-                            mix_add(dry, loop_out);
-                        }
-                        // Arming captures nothing - the pre-roll is
-                        // still counting down on the UI thread.
-                        LoopState::Idle | LoopState::Stopped | LoopState::Arming => {}
-                    }
-
-                    duplicate_mono_to_channels(dry, channels, out);
-                }
-
-                output_control.publish_telemetry(
-                    stack.recorded_len(),
-                    stack.play_pos(),
-                    stack.layer_count(),
-                );
-            },
+            move |data: &mut [i32], _: &cpal::OutputCallbackInfo| output.process(data),
             stream_err_fn,
             None,
         )
@@ -327,7 +405,7 @@ pub fn build_looper_streams(
         input: input_stream,
         output: output_stream,
         sample_rate,
-        captured: capture_rx,
+        captured,
     })
 }
 

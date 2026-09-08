@@ -350,15 +350,25 @@ fn build_audio_path(
     // Everything below is mono.
     let latency_frames = (settings.latency_ms as usize * sample_rate as usize) / 1_000;
 
-    // Dry passthrough bridge.
-    let (mut passthrough_tx, passthrough_rx) = HeapRb::<i32>::new(latency_frames * 2).split();
+    // Room for the delay *and* a whole callback on top of it. The delay
+    // is the backlog these rings carry at rest, so a push has to fit
+    // above it or it spills and the samples are gone - and a driver
+    // buffer is easily larger than the delay (512 frames against 8 ms of
+    // headroom at 44.1 kHz is 512 against 352). `SCRATCH_CAPACITY` is
+    // already this file's bound on one callback, and at 32768 frames it
+    // absorbs many of them.
+    let ring_capacity = latency_frames + SCRATCH_CAPACITY;
+
+    // Dry passthrough bridge. The prefill, not the capacity, is what
+    // sets the monitoring delay.
+    let (mut passthrough_tx, passthrough_rx) = HeapRb::<i32>::new(ring_capacity).split();
     for _ in 0..latency_frames {
         passthrough_tx.try_push(0).unwrap();
     }
 
     // Feeds captured samples to the output path, which owns the layer
     // stack.
-    let (recorder_tx, recorder_rx) = HeapRb::<i32>::new(latency_frames * 2).split();
+    let (recorder_tx, recorder_rx) = HeapRb::<i32>::new(ring_capacity).split();
 
     // The same samples again, for the copy the UI thread keeps so that
     // the loop can be saved.

@@ -201,3 +201,29 @@ fn the_recorder_and_the_mirror_are_fed_the_same_samples() {
     assert_eq!(n, BLOCK * 2, "both blocks reached the recorder");
     assert_eq!(recorded[..n], mirrored[..m], "the same samples, delayed alike");
 }
+
+/// A driver hands over whole buffers, and a buffer is routinely larger
+/// than the monitoring delay - 512 frames against 8 ms of headroom at
+/// 44.1 kHz. The ring has to hold the delay and a callback on top of it,
+/// or every push spills and the monitored signal is shredded.
+#[test]
+fn a_callback_larger_than_the_monitoring_delay_is_not_dropped() {
+    let settings = test_settings();
+    let latency_frames = (settings.latency_ms as usize * TEST_RATE as usize) / 1_000;
+    let control = Arc::new(SharedControl::new(settings.volume_pct));
+    let (mut path, _captured) = build_audio_path(&control, &settings, TEST_RATE, 1, &[]);
+
+    let frames = latency_frames * 4;
+    let input: Vec<i32> = (1..=frames as i32).collect();
+    path.input.process(&input);
+
+    let (_, spilled) = control.take_underrun_counts();
+    assert_eq!(spilled, 0, "the passthrough ring could not hold one callback");
+
+    let mut out = vec![0i32; frames];
+    path.output.process(&mut out);
+
+    let mut expected = vec![0i32; latency_frames];
+    expected.extend_from_slice(&input[..frames - latency_frames]);
+    assert_eq!(out, expected, "delayed by the monitoring delay, otherwise whole");
+}

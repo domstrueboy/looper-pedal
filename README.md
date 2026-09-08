@@ -210,9 +210,9 @@ The last two are a memory multiplier - every layer is pre-allocated at
 the full loop length, so it costs `seconds x layers x sample rate x 4`
 bytes, and the settings screen shows the figure next to the sliders.
 
-Deliberately *not* settings: `SCRATCH_CAPACITY` (how much of one
-callback the fixed scratch buffers cover - about what a driver might
-hand us, not about how anyone wants the app to behave),
+Deliberately *not* settings: `SCRATCH_CAPACITY` (the bound on one
+callback - what a driver might hand us, not how anyone wants the app to
+behave; it sizes the scratch buffers and the headroom in the rings),
 `CANDIDATE_SAMPLE_RATES` (a probe list, not a choice), and the window
 and widget sizes.
 

@@ -41,7 +41,7 @@ fn find_device(device_name: &str) -> Result<cpal::Device, String> {
 }
 
 /// Candidate rates `device_name` actually supports, in i32.
-pub fn supported_sample_rates(device_name: &str) -> Result<Vec<u32>, String> {
+fn supported_sample_rates(device_name: &str) -> Result<Vec<u32>, String> {
     let device = find_device(device_name)?;
     let configs: Vec<_> = device
         .supported_output_configs()
@@ -58,8 +58,8 @@ pub fn supported_sample_rates(device_name: &str) -> Result<Vec<u32>, String> {
         .collect())
 }
 
-/// Hardware input channel count, so settings can offer a picker.
-pub fn input_channel_count(device_name: &str) -> Result<u16, String> {
+/// Hardware input channel count.
+fn input_channel_count(device_name: &str) -> Result<u16, String> {
     let device = find_device(device_name)?;
     let config = device
         .default_input_config()
@@ -67,8 +67,10 @@ pub fn input_channel_count(device_name: &str) -> Result<u16, String> {
     Ok(config.channels())
 }
 
-/// Both of the above, which the settings screen always needs together.
-/// Falls back to empty/zero rather than surfacing the error.
+/// Both of the above, which is the only way the settings screen wants
+/// them. Falls back to empty/zero rather than surfacing the error - a
+/// device that answers neither can't be started, and the screen says so
+/// from the empty lists themselves.
 pub fn rates_and_channels(device_name: &str) -> (Vec<u32>, u16) {
     (
         supported_sample_rates(device_name).unwrap_or_default(),

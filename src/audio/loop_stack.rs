@@ -76,7 +76,7 @@ impl LoopStack {
         }
     }
 
-    pub fn capacity(&self) -> usize {
+    fn capacity(&self) -> usize {
         self.layers[0].samples.len()
     }
 
@@ -92,7 +92,7 @@ impl LoopStack {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.loop_len == 0
     }
 
@@ -104,7 +104,7 @@ impl LoopStack {
         self.count
     }
 
-    pub fn is_full(&self) -> bool {
+    fn is_full(&self) -> bool {
         self.count >= self.layers.len()
     }
 
@@ -118,18 +118,18 @@ impl LoopStack {
         self.recording = Some(0);
     }
 
-    /// Appends to the first layer, stopping at capacity. Returns how many
-    /// samples were written.
-    pub fn record_first_layer(&mut self, input: &[i32]) -> usize {
+    /// Appends to the first layer, stopping at capacity - a take that
+    /// reaches `max_loop_secs` stops growing rather than wrapping. How
+    /// much has landed is `recorded_len`.
+    pub fn record_first_layer(&mut self, input: &[i32]) {
         let Some(index) = self.recording else {
-            return 0;
+            return;
         };
         let capacity = self.capacity();
         let layer = &mut self.layers[index];
         let n = input.len().min(capacity - layer.written);
         layer.samples[layer.written..layer.written + n].copy_from_slice(&input[..n]);
         layer.written += n;
-        n
     }
 
     /// Fixes the loop length at whatever was recorded and rewinds to the

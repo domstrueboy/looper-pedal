@@ -1,5 +1,8 @@
 use crate::app::Action;
-use crate::config::*;
+use crate::config::{
+    LATENCY_MS_RANGE, LONG_PRESS_MS_RANGE, MAX_LAYERS_RANGE, MAX_LOOP_SECS_RANGE, PREROLL_MS_RANGE,
+    VOLUME_PCT_RANGE,
+};
 use crate::settings::SettingsState;
 
 /// Reserved below the scrolling list so Start is always reachable.

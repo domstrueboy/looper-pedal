@@ -47,6 +47,11 @@ Delete it to start over from the Settings screen.
 
 ## Using the looper
 
+![The looper screen, playing back a recorded loop](looper-screen.png)
+
+*Mid-loop: one layer recorded, the bar showing where in the loop
+playback is, and the main button offering pause.*
+
 One control drives everything - either the **spacebar** or the on-screen
 round button. They're fully interchangeable.
 

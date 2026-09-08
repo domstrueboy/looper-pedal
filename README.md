@@ -52,10 +52,96 @@ opened or closed.
 
 ## Module layout
 
+Solid arrows are plain calls. Thick arrows cross a thread boundary, and
+only ever through atomics or a ring buffer.
+
+```mermaid
+flowchart TB
+    GUITAR(["guitar - ASIO in"])
+    SPEAKERS(["ASIO out"])
+
+    subgraph UI["UI thread - one frame at a time"]
+        direction TB
+        subgraph FW["framework-aware - the only egui in the app"]
+            MAIN["main.rs<br/>window, frame loop, tick"]
+            UIL["ui/looper.rs"]
+            UIS["ui/settings.rs"]
+            UII["ui/indicator.rs"]
+        end
+        subgraph MODEL["plain data - no egui, no cpal"]
+            APP["app.rs<br/>which screen is up"]
+            LOOPER["looper.rs<br/>looper-screen state"]
+            SET["settings.rs"]
+            SM["state_machine.rs"]
+            PR["preroll.rs"]
+            INPUT["input.rs"]
+            MIRROR["loop_mirror.rs"]
+            CFG["config.rs"]
+            WAV["wav.rs"]
+        end
+    end
+
+    SHARED(["SharedControl<br/>atomics only"])
+    CAPTURE(["capture ring"])
+
+    subgraph AUDIO["cpal callbacks - real-time: no locks, no allocation"]
+        direction TB
+        INPATH["InputPath<br/>channel pick, MonitorDelay"]
+        BRIDGE(["passthrough ring<br/>recorder ring"])
+        OUTPATH["OutputPath<br/>monitor plus loop, overdub"]
+        STACK["LoopStack<br/>the layers"]
+    end
+
+    MAIN --> UIL
+    MAIN --> UIS
+    MAIN -->|"tick(space, now)"| LOOPER
+    UIL --> UII
+    UIL -->|"Action"| APP
+    UIS -->|"Action::Start"| APP
+    APP --> LOOPER
+    APP --> SET
+    LOOPER --> SM
+    LOOPER --> PR
+    LOOPER --> INPUT
+    LOOPER --> MIRROR
+    SET --> CFG
+    MIRROR --> WAV
+
+    LOOPER ==>|"state, clear, remove layer"| SHARED
+    SHARED ==>|"loop length, position, layers, underruns"| LOOPER
+    SHARED <--> INPATH
+    SHARED <--> OUTPATH
+
+    GUITAR --> INPATH
+    INPATH --> BRIDGE
+    BRIDGE --> OUTPATH
+    OUTPATH --> STACK
+    OUTPATH --> SPEAKERS
+    INPATH ==>|"delayed samples"| CAPTURE
+    CAPTURE ==> MIRROR
+```
+
+Three asymmetries the picture makes plain, and the prose above hides:
+
+- **Nothing reaches into the audio side.** Everything the UI thread
+  wants done crosses as a value it writes and forgets - a state, a
+  one-shot flag - and `LoopStack` is only ever reachable from inside
+  `OutputPath`. There is no arrow pointing at it from the left.
+- **The two directions carry different things.** UI to audio is a
+  handful of atomics. Audio to UI is those, plus a whole stream of
+  samples through the capture ring, which is why the UI thread's copy
+  of the loop exists at all.
+- **`ui/` is a leaf.** It reads a model and returns an `Action`; it
+  never writes one. Swapping GUI library means replacing the two boxes
+  in the framework-aware group and nothing below them.
+
+The files themselves:
+
 ```
 src/
-  main.rs                    eframe glue and nothing else: window setup,
-                              and handing each frame to a screen renderer
+  main.rs                    eframe glue: window setup, ticking the
+                              looper, and handing each frame to a
+                              screen renderer
   app.rs                     which screen is up, screen switching, and
                               acting on what a renderer reports back
   looper.rs                  looper-screen state: state machine, the audio

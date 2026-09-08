@@ -36,9 +36,6 @@ pub const DEFAULT_LONG_PRESS_MS: u32 = 2000;
 
 const CONFIG_DIR: &str = "looper-pedal";
 const CONFIG_FILE: &str = "config.toml";
-/// The old config: a hand-rolled `key=value` file next to the
-/// executable. Read once, to migrate - see `load`.
-const LEGACY_FILE: &str = "looper-pedal.cfg";
 const LOOP_DIR: &str = "loop";
 
 /// Persisted device/rate/input-channel/volume/pre-roll choice, which
@@ -103,25 +100,12 @@ fn default_long_press_ms() -> u32 {
 }
 
 impl AppConfig {
-    /// Reads the config, migrating one from next to the executable if
-    /// that's all there is. `None` means there's nothing usable and the
+    /// Reads the config. `None` means there's nothing usable and the
     /// caller should show the settings picker.
     pub fn load() -> Option<Self> {
-        let current = std::fs::read_to_string(config_path())
+        std::fs::read_to_string(config_path())
             .ok()
-            .and_then(|text| Self::from_toml(&text));
-        if current.is_some() {
-            return current;
-        }
-
-        let migrated = std::fs::read_to_string(legacy_path())
-            .ok()
-            .and_then(|text| Self::from_legacy(&text))?;
-        // Write it where it belongs now, so this happens once. The old
-        // file is left in place rather than deleted - it does no harm,
-        // and an older build can still read it.
-        let _ = migrated.save();
-        Some(migrated)
+            .and_then(|text| Self::from_toml(&text))
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -164,46 +148,6 @@ impl AppConfig {
 
     fn to_toml(&self) -> Result<String, String> {
         toml::to_string_pretty(self).map_err(|e| format!("serializing config: {e}"))
-    }
-
-    /// The old `key=value` format, read only to migrate it. Can go once
-    /// no such file is likely to be left anywhere.
-    fn from_legacy(text: &str) -> Option<Self> {
-        let mut device_name = None;
-        let mut sample_rate = None;
-        let mut input_channel = None;
-        let mut volume_pct = None;
-        let mut preroll_ms = None;
-
-        for line in text.lines() {
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            match key {
-                "device_name" => device_name = Some(value.to_string()),
-                "sample_rate" => sample_rate = value.parse().ok(),
-                "input_channel" => input_channel = value.parse().ok(),
-                "volume_pct" => volume_pct = value.parse().ok(),
-                "preroll_ms" => preroll_ms = value.parse().ok(),
-                _ => {}
-            }
-        }
-
-        Some(
-            Self {
-                device_name: device_name?,
-                sample_rate: sample_rate?,
-                input_channel: input_channel.unwrap_or(0),
-                volume_pct: volume_pct.unwrap_or(DEFAULT_VOLUME_PCT),
-                preroll_ms: preroll_ms.unwrap_or(DEFAULT_PREROLL_MS),
-                // Nothing after this existed in that format.
-                latency_ms: DEFAULT_LATENCY_MS,
-                max_loop_secs: DEFAULT_MAX_LOOP_SECS,
-                max_layers: DEFAULT_MAX_LAYERS,
-                long_press_ms: DEFAULT_LONG_PRESS_MS,
-            }
-            .clamped(),
-        )
     }
 }
 
@@ -250,10 +194,6 @@ fn app_dir() -> PathBuf {
         Some(dirs) => dirs.config_dir().join(CONFIG_DIR),
         None => exe_dir(),
     }
-}
-
-fn legacy_path() -> PathBuf {
-    exe_dir().join(LEGACY_FILE)
 }
 
 fn clamp_to(value: u32, range: RangeInclusive<u32>) -> u32 {

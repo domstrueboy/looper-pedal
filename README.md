@@ -189,9 +189,7 @@ recorded loop will want a per-user directory of its own soon anyway.
 `device_name` and `sample_rate` are required; everything else falls back
 to a default, so a config written by an older build still loads instead
 of throwing you back to the settings screen. Unknown keys are ignored,
-and comments are allowed, so the file is safe to hand-edit. A
-pre-existing `looper-pedal.cfg` next to the executable is read once and
-rewritten in the new place and format; the old file is left alone.
+and comments are allowed, so the file is safe to hand-edit.
 
 Every setting's default and allowed range is declared once, in
 `config.rs`: the settings screen builds its sliders from those ranges,

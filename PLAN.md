@@ -127,9 +127,9 @@ TOML via `serde` + `toml`, in the per-user config directory found with
 `directories` - see README's settings section for the paths and the
 compatibility rules. `device_name` and `sample_rate` are required,
 everything else defaults, so adding a setting can't invalidate an
-existing file. An old `looper-pedal.cfg` next to the executable is read
-once and rewritten in the new place; that reader is marked as removable
-once no such file is likely to be left.
+existing file. The reader for the old `looper-pedal.cfg` next to the
+executable was dropped in the post-v2 review, no such file being likely
+to be left anywhere.
 
 Deps added as planned, the one deliberate exception to minimal-deps:
 `serde`, `toml`, `directories`.

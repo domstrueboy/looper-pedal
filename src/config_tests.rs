@@ -32,7 +32,8 @@ fn a_round_trip_keeps_every_setting() {
 
 #[test]
 fn a_device_name_with_spaces_survives_being_written() {
-    // The old format stored this bare, which is not valid TOML.
+    // A bare, unquoted value is not valid TOML, so this has to be
+    // written quoted or the file won't read back.
     let text = saved().to_toml().expect("serializes");
     assert!(
         text.contains("\"Audient USB Audio ASIO Driver\""),
@@ -71,33 +72,8 @@ fn unknown_keys_are_ignored() {
 }
 
 #[test]
-fn the_old_format_is_not_mistaken_for_toml() {
-    // Unquoted values aren't TOML, so `load` falls through to migration.
+fn a_file_that_is_not_toml_is_rejected_rather_than_guessed_at() {
     assert!(AppConfig::from_toml("device_name=iD4\nsample_rate=44100\n").is_none());
-}
-
-#[test]
-fn the_old_format_migrates() {
-    let config = AppConfig::from_legacy(
-        "device_name=Audient USB Audio ASIO Driver\n\
-         sample_rate=44100\n\
-         input_channel=1\n\
-         volume_pct=120\n",
-    )
-    .expect("migrates");
-
-    assert_eq!(config.device_name, "Audient USB Audio ASIO Driver");
-    assert_eq!(config.sample_rate, 44100);
-    assert_eq!(config.input_channel, 1);
-    assert_eq!(config.volume_pct, 120);
-    // Pre-roll postdates that format.
-    assert_eq!(config.preroll_ms, DEFAULT_PREROLL_MS);
-}
-
-#[test]
-fn an_old_file_naming_no_device_migrates_nothing() {
-    assert!(AppConfig::from_legacy("sample_rate=44100\n").is_none());
-    assert!(AppConfig::from_legacy("garbage\n").is_none());
 }
 
 #[test]

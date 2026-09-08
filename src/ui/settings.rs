@@ -24,9 +24,9 @@ pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Action>
                 }
             });
 
-            // The list outgrew the window once the engine settings
-            // joined it, so it scrolls - with Start kept outside, where
-            // it can't end up below the fold.
+            // More settings than the window is tall, so the list
+            // scrolls - with Start kept outside it, where it can't end
+            // up below the fold.
             let can_start = egui::ScrollArea::vertical()
                 .max_height((ui.available_height() - START_ROW_HEIGHT).max(120.0))
                 .show(ui, |ui| {

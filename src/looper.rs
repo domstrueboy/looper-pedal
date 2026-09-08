@@ -76,6 +76,11 @@ impl LooperState {
         self.input_handler.is_long_press_active()
     }
 
+    /// How long the control has to be held to clear, for the hint line.
+    pub fn long_press_secs(&self) -> f32 {
+        self.input_handler.long_press_threshold().as_secs_f32()
+    }
+
     /// Loop length in seconds (0.0 if empty) and playback position as a
     /// 0.0-1.0 fraction.
     pub fn loop_duration_and_progress(&self) -> (f32, f32) {

@@ -2,7 +2,7 @@
 /// Ditto): one control cycles Idle -> Recording -> Looping -> Stopped ->
 /// Looping -> ..., and a long-press clears from any state back to Idle.
 /// Overdub sits off that cycle on a control of its own, so the press
-/// cycle keeps behaving exactly as it always has.
+/// cycle stays the four states above and nothing else.
 ///
 /// The discriminants cross the thread boundary as a `u8` - see
 /// `SharedControl::load_state` - so their order is not free to change.
@@ -84,7 +84,9 @@ impl LoopStateMachine {
         };
     }
 
-    /// Long-press (~2s hold): clears the loop from any state, back to Idle.
+    /// Long-press: clears the loop from any state, back to Idle. How long
+    /// a hold that takes is `long_press_ms`, and `InputHandler`'s to
+    /// measure.
     pub fn clear(&mut self) {
         self.state = LoopState::Idle;
     }

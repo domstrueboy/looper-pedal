@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 /// because nothing here touches the device - which is what lets it be
 /// tested against a made-up `Instant` rather than a real stream.
 pub struct Preroll {
-    /// How long to wait. Zero means don't - recording starts the moment
-    /// it's asked for, which is what it did before this existed.
+    /// How long to wait. Zero means don't: recording starts the moment
+    /// it's asked for.
     duration: Duration,
     /// Set while a countdown is running, cleared the moment it elapses
     /// or is called off.

@@ -26,6 +26,12 @@ impl InputHandler {
         }
     }
 
+    /// The configured hold time, so the UI can say what it actually is
+    /// rather than naming a fixed one.
+    pub fn long_press_threshold(&self) -> Duration {
+        self.long_press_threshold
+    }
+
     /// True from the frame `LongPressClear` fired until release - for UI
     /// confirming the clear, distinct from the one-shot event itself.
     pub fn is_long_press_active(&self) -> bool {

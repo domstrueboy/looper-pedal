@@ -127,7 +127,10 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
                 // raggedly at this window width.
                 ui.add_space(4.0);
                 ui.label("Space or button: record / loop / stop");
-                ui.label("Hold either ~2s to clear");
+                ui.label(format!(
+                    "Hold either {:.1}s to clear",
+                    looper.long_press_secs()
+                ));
                 ui.label("O: overdub   |   R: remove last");
             });
         });

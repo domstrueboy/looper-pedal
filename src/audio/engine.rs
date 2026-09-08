@@ -258,7 +258,9 @@ pub fn build_looper_streams(
                             }
                             mix_add(dry, loop_out);
                         }
-                        LoopState::Idle | LoopState::Stopped => {}
+                        // Arming captures nothing - the pre-roll is
+                        // still counting down on the UI thread.
+                        LoopState::Idle | LoopState::Stopped | LoopState::Arming => {}
                     }
 
                     duplicate_mono_to_channels(dry, channels, out);

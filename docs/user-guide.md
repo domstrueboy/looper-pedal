@@ -16,6 +16,12 @@ The first time you launch the app, you'll see a **Settings** screen:
    actually plugged into (e.g. "Input 1"). Only this one channel is used;
    it's centered equally in both ears when you monitor, so it doesn't
    matter that it came from a single input.
+4. **Loop volume** - how loud the loop plays back relative to your live
+   signal
+5. **Record delay** - how long to wait after you hit record before it
+   actually starts capturing, so you have time to get your hands back on
+   the guitar. Defaults to **5 seconds**; drag it down to **off** if
+   you'd rather it start immediately.
 
 Click **Start**. Your choices are remembered, so next time the app opens
 straight into the looper - you won't see Settings again unless you
@@ -29,7 +35,7 @@ round button. They're fully interchangeable.
 
 | Press | What happens |
 |---|---|
-| 1st press | Start recording |
+| 1st press | Start recording (or start the countdown, with a record delay set) |
 | 2nd press | Stop recording, loop starts playing immediately |
 | 3rd press | Stop the loop (silence, but it's still remembered) |
 | 4th press | Resume playing the same loop |
@@ -41,6 +47,10 @@ playing - the loop just plays back on top of it.
 The colored dot shows what's happening:
 
 - **Gray** - Empty, nothing recorded
+- **Blue** (pulsing) - Get ready: waiting out the record delay before
+  recording starts. A progress bar fills as the wait runs out, with the
+  seconds left written in it - recording begins when it's full. Press
+  again to call the whole thing off.
 - **Red** (pulsing) - Recording, with elapsed time shown
 - **Green** - Looping, with the loop's length and a progress bar showing
   where in the loop you currently are

@@ -105,6 +105,24 @@ Mimics a classic single-footswitch looper pedal:
 Idle - it fires the moment the hold crosses the threshold while still
 held, not on release.
 
+### Pre-roll
+
+With a **record delay** set in Settings (5s by default), step 1 goes
+through **Arming** instead: a bar fills as the wait runs out, then
+Recording. It's for the first recording only - once a loop is playing
+you're already in time with it - and a press part-way through calls it
+off, back to Idle.
+
+The countdown runs on the UI thread, which already ticks every frame and
+already works in `Instant`, so no timing code goes anywhere near the
+audio callback: the callback sees `Arming` and captures nothing, exactly
+as it does for `Idle`, until the state flips to `Recording`. `Arming` is
+still a published state of its own rather than being hidden from the
+audio thread, because a metronome count-in eventually needs to click
+during that window. Input is handled before the countdown each frame, so
+a press meant to cancel wins over the countdown happening to run out on
+the same frame.
+
 **Overdub** deliberately sits *off* that cycle, on its own control (the
 `O` key or the Overdub button), so the press cycle above keeps behaving
 exactly as it always has: **Looping** <--overdub--> **Overdubbing**. A

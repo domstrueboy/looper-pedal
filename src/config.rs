@@ -1,7 +1,13 @@
 use std::path::PathBuf;
 
-/// Persisted device/rate/input-channel/volume choice, stored next to the
-/// executable as a small `key=value` file.
+/// Default wait before recording starts, for a fresh install or a config
+/// written before the setting existed. Long enough to put a guitar back
+/// on and be ready; drag the slider to zero to turn it off.
+pub const DEFAULT_PREROLL_MS: u32 = 5000;
+
+/// Persisted device/rate/input-channel/volume/pre-roll choice, stored
+/// next to the executable as a small `key=value` file. Doubles as the
+/// bundle of settings the looper is started with.
 pub struct AppConfig {
     pub device_name: String,
     pub sample_rate: u32,
@@ -10,6 +16,9 @@ pub struct AppConfig {
     /// Loop playback gain as a percentage of unity (100 = unchanged).
     /// Applied to the loop only, never the live passthrough.
     pub volume_pct: u32,
+    /// How long to wait between pressing record and actually capturing,
+    /// so there's time to get ready. 0 = start immediately.
+    pub preroll_ms: u32,
 }
 
 impl AppConfig {
@@ -29,6 +38,7 @@ impl AppConfig {
         let mut sample_rate = None;
         let mut input_channel = None;
         let mut volume_pct = None;
+        let mut preroll_ms = None;
         for line in text.lines() {
             let (key, value) = line.split_once('=')?;
             match key {
@@ -36,6 +46,7 @@ impl AppConfig {
                 "sample_rate" => sample_rate = value.parse::<u32>().ok(),
                 "input_channel" => input_channel = value.parse::<u16>().ok(),
                 "volume_pct" => volume_pct = value.parse::<u32>().ok(),
+                "preroll_ms" => preroll_ms = value.parse::<u32>().ok(),
                 _ => {}
             }
         }
@@ -45,13 +56,21 @@ impl AppConfig {
             sample_rate: sample_rate?,
             input_channel: input_channel?,
             volume_pct: volume_pct?,
+            // Defaulted rather than required, so a config written before
+            // pre-roll existed still loads instead of throwing the user
+            // back to the settings screen.
+            preroll_ms: preroll_ms.unwrap_or(DEFAULT_PREROLL_MS),
         })
     }
 
     pub fn save(&self) -> std::io::Result<()> {
         let text = format!(
-            "device_name={}\nsample_rate={}\ninput_channel={}\nvolume_pct={}\n",
-            self.device_name, self.sample_rate, self.input_channel, self.volume_pct
+            "device_name={}\nsample_rate={}\ninput_channel={}\nvolume_pct={}\npreroll_ms={}\n",
+            self.device_name,
+            self.sample_rate,
+            self.input_channel,
+            self.volume_pct,
+            self.preroll_ms
         );
         std::fs::write(Self::path(), text)
     }

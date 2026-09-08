@@ -10,6 +10,19 @@ use crate::ui::indicator;
 /// centered without laying it out twice.
 const CONTROL_BUTTON_SIZE: [f32; 2] = [118.0, 24.0];
 
+/// Gathered fresh each time it's needed: the values change as the frame
+/// advances the looper.
+fn readout(looper: &LooperState) -> indicator::Readout {
+    let (loop_duration_secs, progress_fraction) = looper.loop_duration_and_progress();
+    indicator::Readout {
+        state: looper.state(),
+        loop_duration_secs,
+        progress_fraction,
+        countdown_secs: looper.preroll_remaining_secs(),
+        arming_fraction: looper.preroll_progress(),
+    }
+}
+
 pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
     // Long-press detection needs continuous frames, not just
     // input-triggered repaints.
@@ -46,11 +59,11 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
 
                 // Button and spacebar feed one InputHandler (see
                 // `LooperState::tick`), so they can't desync.
-                let icon =
-                    indicator::press_button_icon(looper.state(), looper.is_long_press_active());
+                let label =
+                    indicator::press_button_label(&readout(looper), looper.is_long_press_active());
                 let button_response = ui.add_sized(
                     [90.0, 90.0],
-                    egui::Button::new(egui::RichText::new(icon).size(32.0)).corner_radius(45),
+                    egui::Button::new(egui::RichText::new(label).size(32.0)).corner_radius(45),
                 );
 
                 // Latched, not `is_pointer_button_down_on()` - see
@@ -65,8 +78,7 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
                 looper.tick(space_down, Instant::now());
 
                 ui.add_space(4.0);
-                let (duration_secs, progress_fraction) = looper.loop_duration_and_progress();
-                indicator::state_indicator(ui, looper.state(), duration_secs, progress_fraction);
+                indicator::state_indicator(ui, &readout(looper));
 
                 // Allocated at exactly the row's own width so the
                 // centering layout above can center it - a plain

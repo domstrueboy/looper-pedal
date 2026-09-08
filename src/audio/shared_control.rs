@@ -80,7 +80,8 @@ impl SharedControl {
             1 => LoopState::Recording,
             2 => LoopState::Looping,
             3 => LoopState::Stopped,
-            _ => LoopState::Overdubbing,
+            4 => LoopState::Overdubbing,
+            _ => LoopState::Arming,
         }
     }
 

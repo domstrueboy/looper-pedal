@@ -1,10 +1,11 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::audio::engine;
 use crate::audio::loop_stack::MAX_LAYERS;
 use crate::audio::shared_control::SharedControl;
 use crate::audio::state_machine::{LoopState, LoopStateMachine};
+use crate::config::AppConfig;
 use crate::input::{InputEvent, InputHandler};
 
 /// State behind the looper screen: the state machine (owned here, on the
@@ -18,6 +19,13 @@ pub struct LooperState {
     // even while it's still held, which broke long-press-clear from the
     // on-screen button. Set by the renderer, kept here to survive frames.
     button_held: bool,
+    /// How long to count down before the first recording starts; zero
+    /// means start immediately, which is what it was before this
+    /// existed.
+    preroll: Duration,
+    /// Set while a pre-roll is counting down, cleared the moment it
+    /// elapses or is called off.
+    armed_at: Option<Instant>,
     sample_rate: u32,
     _input_stream: cpal::Stream,
     _output_stream: cpal::Stream,
@@ -26,24 +34,21 @@ pub struct LooperState {
 impl LooperState {
     /// Opens the device and starts the streams, or returns why it couldn't:
     /// device/rate mismatches are user-recoverable, not bugs.
-    pub fn start(
-        device_name: &str,
-        sample_rate: u32,
-        input_channel: u16,
-        volume_pct: u32,
-    ) -> Result<Self, String> {
-        let control = Arc::new(SharedControl::new(volume_pct));
+    pub fn start(config: &AppConfig) -> Result<Self, String> {
+        let control = Arc::new(SharedControl::new(config.volume_pct));
         let (_input_stream, _output_stream, sample_rate) = engine::build_looper_streams(
             Arc::clone(&control),
-            device_name,
-            sample_rate,
-            input_channel,
+            &config.device_name,
+            config.sample_rate,
+            config.input_channel,
         )?;
         Ok(Self {
             control,
             state_machine: LoopStateMachine::new(),
             input_handler: InputHandler::new(),
             button_held: false,
+            preroll: Duration::from_millis(u64::from(config.preroll_ms)),
+            armed_at: None,
             sample_rate,
             _input_stream,
             _output_stream,
@@ -112,20 +117,61 @@ impl LooperState {
         self.button_held = held;
     }
 
+    /// Seconds left of the pre-roll countdown, or 0.0 when one isn't
+    /// running.
+    pub fn preroll_remaining_secs(&self) -> f32 {
+        match self.armed_at {
+            Some(armed_at) => {
+                (self.preroll.as_secs_f32() - armed_at.elapsed().as_secs_f32()).max(0.0)
+            }
+            None => 0.0,
+        }
+    }
+
+    /// How far through the pre-roll the countdown has got, 0.0-1.0.
+    pub fn preroll_progress(&self) -> f32 {
+        match self.armed_at {
+            Some(armed_at) if !self.preroll.is_zero() => {
+                (armed_at.elapsed().as_secs_f32() / self.preroll.as_secs_f32()).clamp(0.0, 1.0)
+            }
+            _ => 0.0,
+        }
+    }
+
     /// Call once per frame. Folds the spacebar and the button's latch into
     /// one `InputHandler`, so the two can't desync.
     pub fn tick(&mut self, key_held: bool, now: Instant) {
         self.log_underruns();
+
         let event = self.input_handler.update(key_held || self.button_held, now);
-        self.apply(event);
+        self.apply(event, now);
+
+        // Deliberately after the input: if a press meant to call the
+        // pre-roll off lands on the same frame the countdown runs out,
+        // the press should win.
+        if let Some(armed_at) = self.armed_at {
+            if now.duration_since(armed_at) >= self.preroll {
+                self.state_machine.finish_arming();
+                self.armed_at = None;
+                self.control.publish_state(self.state_machine.state());
+            }
+        }
     }
 
     /// Publishes the resulting state in the same step as changing it, so
     /// that pairing can't be forgotten at a call site.
-    fn apply(&mut self, event: InputEvent) {
+    fn apply(&mut self, event: InputEvent, now: Instant) {
         match event {
             InputEvent::ShortPress => {
-                self.state_machine.press();
+                // A pre-roll is only for the first recording - once a
+                // loop is playing you're already in time with it.
+                if self.state() == LoopState::Idle && !self.preroll.is_zero() {
+                    self.state_machine.arm();
+                    self.armed_at = Some(now);
+                } else {
+                    self.state_machine.press();
+                    self.armed_at = None;
+                }
                 self.control.publish_state(self.state_machine.state());
             }
             InputEvent::LongPressClear => self.clear(),
@@ -135,6 +181,7 @@ impl LooperState {
 
     fn clear(&mut self) {
         self.state_machine.clear();
+        self.armed_at = None;
         self.control.publish_state(self.state_machine.state());
         self.control.request_clear();
     }

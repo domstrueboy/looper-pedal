@@ -13,6 +13,12 @@ pub enum LoopState {
     Looping,
     Stopped,
     Overdubbing,
+    /// Counting down a configured pre-roll before recording starts, so
+    /// there's time to get hands back on the guitar. The audio thread
+    /// treats this like Idle - nothing is captured yet - but it's a
+    /// published state of its own because a count-in eventually needs to
+    /// click here.
+    Arming,
 }
 
 pub struct LoopStateMachine {
@@ -31,14 +37,32 @@ impl LoopStateMachine {
     }
 
     /// Short press: advances the cycle. Both playing states stop, so the
-    /// main control always means "stop" while something is playing.
+    /// main control always means "stop" while something is playing, and a
+    /// press part-way through a pre-roll calls it off.
     pub fn press(&mut self) {
         self.state = match self.state {
             LoopState::Idle => LoopState::Recording,
             LoopState::Recording => LoopState::Looping,
             LoopState::Looping | LoopState::Overdubbing => LoopState::Stopped,
             LoopState::Stopped => LoopState::Looping,
+            LoopState::Arming => LoopState::Idle,
         };
+    }
+
+    /// Starts a pre-roll instead of recording straight away. Whether a
+    /// press comes here or to `press` is the caller's call - it's the one
+    /// that knows whether a delay is configured.
+    pub fn arm(&mut self) {
+        if self.state == LoopState::Idle {
+            self.state = LoopState::Arming;
+        }
+    }
+
+    /// The pre-roll elapsed: recording starts for real.
+    pub fn finish_arming(&mut self) {
+        if self.state == LoopState::Arming {
+            self.state = LoopState::Recording;
+        }
     }
 
     /// The overdub control: opens a new layer over the playing loop, or

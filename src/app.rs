@@ -12,12 +12,7 @@ pub enum Screen {
 /// What a rendered frame asks the app to do next: `ui/` reports intent,
 /// `apply` acts on it.
 pub enum Action {
-    Start {
-        device_name: String,
-        sample_rate: u32,
-        input_channel: u16,
-        volume_pct: u32,
-    },
+    Start(AppConfig),
     OpenSettings,
 }
 
@@ -30,12 +25,7 @@ impl App {
     /// Settings, carrying the failure so it can say why.
     pub fn new() -> Self {
         let screen = match AppConfig::load() {
-            Some(cfg) => match LooperState::start(
-                &cfg.device_name,
-                cfg.sample_rate,
-                cfg.input_channel,
-                cfg.volume_pct,
-            ) {
+            Some(config) => match LooperState::start(&config) {
                 Ok(looper) => Screen::Looper(looper),
                 Err(err) => Screen::Settings(SettingsState::new(Some(err))),
             },
@@ -46,34 +36,17 @@ impl App {
 
     pub fn apply(&mut self, action: Action) {
         match action {
-            Action::Start {
-                device_name,
-                sample_rate,
-                input_channel,
-                volume_pct,
-            } => self.start_looper(device_name, sample_rate, input_channel, volume_pct),
+            Action::Start(config) => self.start_looper(config),
             Action::OpenSettings => self.screen = Screen::Settings(SettingsState::new(None)),
         }
     }
 
     /// Persists the choice only once the device is known to open; on
     /// failure Settings stays put and shows why.
-    fn start_looper(
-        &mut self,
-        device_name: String,
-        sample_rate: u32,
-        input_channel: u16,
-        volume_pct: u32,
-    ) {
-        match LooperState::start(&device_name, sample_rate, input_channel, volume_pct) {
+    fn start_looper(&mut self, config: AppConfig) {
+        match LooperState::start(&config) {
             Ok(looper) => {
-                let _ = AppConfig {
-                    device_name,
-                    sample_rate,
-                    input_channel,
-                    volume_pct,
-                }
-                .save();
+                let _ = config.save();
                 self.screen = Screen::Looper(looper);
             }
             Err(err) => {

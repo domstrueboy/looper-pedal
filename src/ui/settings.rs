@@ -1,4 +1,5 @@
 use crate::app::Action;
+use crate::config::AppConfig;
 use crate::settings::SettingsState;
 
 pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Action> {
@@ -82,15 +83,30 @@ pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Action>
                         .text("Loop volume")
                         .suffix("%"),
                 );
+                ui.add(
+                    egui::Slider::new(&mut settings.preroll_ms, 0..=5000)
+                        .step_by(500.0)
+                        .text("Record delay")
+                        // Shown in seconds, and as "off" rather than
+                        // "0.0 s" so the default reads as a choice.
+                        .custom_formatter(|ms, _| {
+                            if ms < 1.0 {
+                                "off".to_owned()
+                            } else {
+                                format!("{:.1} s", ms / 1000.0)
+                            }
+                        }),
+                );
 
                 ui.add_space(8.0);
                 if ui.button("Start").clicked() {
-                    action = Some(Action::Start {
+                    action = Some(Action::Start(AppConfig {
                         device_name: settings.devices[settings.selected_device].clone(),
                         sample_rate: settings.sample_rates[settings.selected_rate],
                         input_channel: settings.selected_input_channel as u16,
                         volume_pct: settings.volume_pct,
-                    });
+                        preroll_ms: settings.preroll_ms,
+                    }));
                 }
             });
         });

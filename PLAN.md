@@ -75,22 +75,23 @@ subsystem field out of both binaries' PE headers (2 vs 3).
 the window opens is invisible without a console, so it now reports and
 the settings screen shows it.
 
-### 4. Pre-roll delay before recording
+### 4. Pre-roll delay before recording - done
 
-An optional, configurable wait between pressing record and actually
-capturing, so there's time to get hands back on the guitar. A 0-5s
-slider in Settings, persisted like the other fields; 0 means today's
-behavior.
+An `Arming` state advanced by the UI frame loop, with a 0-5s "Record
+delay" slider in Settings, defaulting to 5s and reading "off" at zero.
+The wait shows as a progress bar filling, not a number counting down -
+a lone number on the button turned out to be ambiguous. First recording
+only; a press part-way through calls it off. The audio callback treats
+`Arming` exactly like `Idle`, so no timing code went near it - see
+README's pre-roll section.
 
-Add an `Arming` state advanced by the UI frame loop, which already
-ticks every frame and already works in `Instant`. The audio thread
-keeps seeing `Idle` until the state flips to `Recording`, so no timing
-code goes into the callback and sample accuracy isn't needed for a "get
-ready" window. A press while arming cancels back to `Idle`; the
-indicator needs an `Arming` row counting down and a cancel icon.
+`Arming` is published rather than hidden from the audio thread on
+purpose: v3's metronome count-in is this same window with clicks in it,
+and will need the callback to know.
 
-Build it as a general arming window - v3's metronome count-in is the
-same window with clicks in it.
+`Action::Start` now carries an `AppConfig` rather than a growing list of
+fields, and `AppConfig::load` defaults a missing `preroll_ms` instead of
+rejecting the file, so configs written before this still load.
 
 ### 5. Preserve the loop across restarts
 

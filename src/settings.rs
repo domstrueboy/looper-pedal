@@ -1,5 +1,5 @@
 use crate::audio::engine;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, DEFAULT_PREROLL_MS};
 
 /// State behind the settings screen: what there is to choose from and
 /// what's selected. Rendered by `ui/settings.rs`.
@@ -12,6 +12,9 @@ pub struct SettingsState {
     pub selected_input_channel: usize,
     /// Loop playback gain, 0-200% of unity - see `AppConfig::volume_pct`.
     pub volume_pct: u32,
+    /// Wait before recording starts, 0-5000ms - see
+    /// `AppConfig::preroll_ms`.
+    pub preroll_ms: u32,
     pub error: Option<String>,
 }
 
@@ -44,6 +47,10 @@ impl SettingsState {
             .unwrap_or(0);
 
         let volume_pct = saved.as_ref().map(|cfg| cfg.volume_pct).unwrap_or(100);
+        let preroll_ms = saved
+            .as_ref()
+            .map(|cfg| cfg.preroll_ms)
+            .unwrap_or(DEFAULT_PREROLL_MS);
 
         Self {
             devices,
@@ -53,6 +60,7 @@ impl SettingsState {
             input_channels,
             selected_input_channel,
             volume_pct,
+            preroll_ms,
             error,
         }
     }

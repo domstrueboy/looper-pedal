@@ -64,6 +64,55 @@ fn clear_from_stopped_returns_to_idle() {
 }
 
 #[test]
+fn arming_counts_down_from_idle_then_records() {
+    let mut sm = LoopStateMachine::new();
+
+    sm.arm();
+    assert_eq!(sm.state(), LoopState::Arming);
+
+    sm.finish_arming();
+    assert_eq!(sm.state(), LoopState::Recording);
+}
+
+#[test]
+fn arming_only_applies_from_idle() {
+    for presses in [1, 2, 3] {
+        let mut sm = LoopStateMachine::new();
+        for _ in 0..presses {
+            sm.press();
+        }
+        let before = sm.state();
+        sm.arm();
+        assert_eq!(sm.state(), before, "after {presses} press(es)");
+    }
+}
+
+#[test]
+fn press_while_arming_calls_the_pre_roll_off() {
+    let mut sm = LoopStateMachine::new();
+    sm.arm();
+    sm.press();
+    assert_eq!(sm.state(), LoopState::Idle);
+}
+
+#[test]
+fn clear_from_arming_returns_to_idle() {
+    let mut sm = LoopStateMachine::new();
+    sm.arm();
+    sm.clear();
+    assert_eq!(sm.state(), LoopState::Idle);
+}
+
+#[test]
+fn finish_arming_does_nothing_if_the_pre_roll_was_called_off() {
+    let mut sm = LoopStateMachine::new();
+    sm.arm();
+    sm.press();
+    sm.finish_arming();
+    assert_eq!(sm.state(), LoopState::Idle);
+}
+
+#[test]
 fn toggle_overdub_starts_and_ends_a_layer_while_looping() {
     let mut sm = LoopStateMachine::new();
     sm.press();

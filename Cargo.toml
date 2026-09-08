@@ -1,6 +1,6 @@
 [package]
 name = "looper_pedal"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 
 # Build-only, and the sole way to put an icon into a Windows executable:

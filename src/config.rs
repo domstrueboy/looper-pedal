@@ -49,7 +49,7 @@ const LOOP_DIR: &str = "loop";
 /// back to the settings screen. The two that identify the device don't:
 /// without them there's nothing to open, so such a file counts as no
 /// config at all.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub device_name: String,
     pub sample_rate: u32,
@@ -204,6 +204,29 @@ impl AppConfig {
             }
             .clamped(),
         )
+    }
+}
+
+impl Default for AppConfig {
+    /// Every setting at its default, with no device chosen yet: what the
+    /// settings screen starts from when there's nothing saved.
+    ///
+    /// Deliberately not what `serde` falls back to - `device_name` and
+    /// `sample_rate` stay required in the file, because a config without
+    /// them names nothing to open. The values come from the same consts
+    /// the per-field defaults do, so there's still one declaration each.
+    fn default() -> Self {
+        Self {
+            device_name: String::new(),
+            sample_rate: 0,
+            input_channel: 0,
+            volume_pct: DEFAULT_VOLUME_PCT,
+            preroll_ms: DEFAULT_PREROLL_MS,
+            latency_ms: DEFAULT_LATENCY_MS,
+            max_loop_secs: DEFAULT_MAX_LOOP_SECS,
+            max_layers: DEFAULT_MAX_LAYERS,
+            long_press_ms: DEFAULT_LONG_PRESS_MS,
+        }
     }
 }
 

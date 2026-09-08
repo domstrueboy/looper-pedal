@@ -4,7 +4,7 @@ use ringbuf::traits::{Producer, Split};
 use ringbuf::{HeapProd, HeapRb};
 
 use crate::audio::loop_stack::LoopStack;
-use crate::config::*;
+use crate::config::AppConfig;
 
 const RATE: u32 = 44_100;
 
@@ -26,15 +26,8 @@ fn new_mirror_at(sample_rate: u32) -> (HeapProd<i32>, LoopMirror) {
 /// the defaults unless a test is specifically about one of them.
 fn settings(sample_rate: u32) -> AppConfig {
     AppConfig {
-        device_name: String::new(),
         sample_rate,
-        input_channel: 0,
-        volume_pct: DEFAULT_VOLUME_PCT,
-        preroll_ms: DEFAULT_PREROLL_MS,
-        latency_ms: DEFAULT_LATENCY_MS,
-        max_loop_secs: DEFAULT_MAX_LOOP_SECS,
-        max_layers: DEFAULT_MAX_LAYERS,
-        long_press_ms: DEFAULT_LONG_PRESS_MS,
+        ..AppConfig::default()
     }
 }
 

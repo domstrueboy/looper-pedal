@@ -41,7 +41,7 @@ pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Action>
                     .add_sized([140.0, 26.0], egui::Button::new("Start"))
                     .clicked()
                 {
-                    action = Some(Action::Start(settings.to_config()));
+                    action = Some(Action::Start(settings.config.clone()));
                 }
             });
         });
@@ -58,15 +58,15 @@ fn controls(ui: &mut egui::Ui, settings: &mut SettingsState) -> bool {
         return false;
     }
 
-    let previous_device = settings.selected_device;
+    let previous_device = settings.config.device_name.clone();
     egui::ComboBox::from_label("ASIO device")
-        .selected_text(settings.devices[settings.selected_device].clone())
+        .selected_text(settings.config.device_name.clone())
         .show_ui(ui, |ui| {
-            for (i, name) in settings.devices.iter().enumerate() {
-                ui.selectable_value(&mut settings.selected_device, i, name);
+            for name in &settings.devices {
+                ui.selectable_value(&mut settings.config.device_name, name.clone(), name);
             }
         });
-    if settings.selected_device != previous_device {
+    if settings.config.device_name != previous_device {
         settings.refresh_for_selected_device();
     }
 
@@ -79,13 +79,10 @@ fn controls(ui: &mut egui::Ui, settings: &mut SettingsState) -> bool {
     }
 
     egui::ComboBox::from_label("Sample rate")
-        .selected_text(format!(
-            "{} Hz",
-            settings.sample_rates[settings.selected_rate]
-        ))
+        .selected_text(format!("{} Hz", settings.config.sample_rate))
         .show_ui(ui, |ui| {
-            for (i, rate) in settings.sample_rates.iter().enumerate() {
-                ui.selectable_value(&mut settings.selected_rate, i, format!("{rate} Hz"));
+            for &rate in &settings.sample_rates {
+                ui.selectable_value(&mut settings.config.sample_rate, rate, format!("{rate} Hz"));
             }
         });
 
@@ -95,13 +92,13 @@ fn controls(ui: &mut egui::Ui, settings: &mut SettingsState) -> bool {
     }
 
     egui::ComboBox::from_label("Input channel")
-        .selected_text(format!("Input {}", settings.selected_input_channel + 1))
+        .selected_text(format!("Input {}", settings.config.input_channel + 1))
         .show_ui(ui, |ui| {
-            for i in 0..settings.input_channels as usize {
+            for channel in 0..settings.input_channels {
                 ui.selectable_value(
-                    &mut settings.selected_input_channel,
-                    i,
-                    format!("Input {}", i + 1),
+                    &mut settings.config.input_channel,
+                    channel,
+                    format!("Input {}", channel + 1),
                 );
             }
         });
@@ -110,12 +107,12 @@ fn controls(ui: &mut egui::Ui, settings: &mut SettingsState) -> bool {
     ui.separator();
 
     ui.add(
-        egui::Slider::new(&mut settings.volume_pct, VOLUME_PCT_RANGE)
+        egui::Slider::new(&mut settings.config.volume_pct, VOLUME_PCT_RANGE)
             .text("Loop volume")
             .suffix("%"),
     );
     ui.add(
-        egui::Slider::new(&mut settings.preroll_ms, PREROLL_MS_RANGE)
+        egui::Slider::new(&mut settings.config.preroll_ms, PREROLL_MS_RANGE)
             .step_by(500.0)
             .text("Record delay")
             // Shown in seconds, and as "off" rather than "0.0 s" so the
@@ -129,7 +126,7 @@ fn controls(ui: &mut egui::Ui, settings: &mut SettingsState) -> bool {
             }),
     );
     ui.add(
-        egui::Slider::new(&mut settings.long_press_ms, LONG_PRESS_MS_RANGE)
+        egui::Slider::new(&mut settings.config.long_press_ms, LONG_PRESS_MS_RANGE)
             .step_by(250.0)
             .text("Hold to clear")
             .custom_formatter(|ms, _| format!("{:.2} s", ms / 1000.0)),
@@ -139,22 +136,22 @@ fn controls(ui: &mut egui::Ui, settings: &mut SettingsState) -> bool {
     ui.separator();
 
     ui.add(
-        egui::Slider::new(&mut settings.latency_ms, LATENCY_MS_RANGE)
+        egui::Slider::new(&mut settings.config.latency_ms, LATENCY_MS_RANGE)
             .text("Latency")
             .suffix(" ms"),
     );
     ui.add(
-        egui::Slider::new(&mut settings.max_loop_secs, MAX_LOOP_SECS_RANGE)
+        egui::Slider::new(&mut settings.config.max_loop_secs, MAX_LOOP_SECS_RANGE)
             .step_by(10.0)
             .text("Max loop length")
             .suffix(" s"),
     );
-    ui.add(egui::Slider::new(&mut settings.max_layers, MAX_LAYERS_RANGE).text("Max layers"));
+    ui.add(egui::Slider::new(&mut settings.config.max_layers, MAX_LAYERS_RANGE).text("Max layers"));
     // Every layer is pre-allocated at the full loop length, so these two
     // settings have a price worth seeing before it's paid.
     ui.label(format!(
         "Reserves {} MB of memory",
-        settings.loop_memory_bytes() / (1024 * 1024)
+        settings.config.loop_memory_bytes() / (1024 * 1024)
     ));
 
     true

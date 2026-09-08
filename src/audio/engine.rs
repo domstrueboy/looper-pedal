@@ -9,10 +9,12 @@ use ringbuf::{
 use super::loop_stack::LoopStack;
 use super::shared_control::SharedControl;
 use super::state_machine::LoopState;
+use crate::config::AppConfig;
 
-const MAX_LOOP_SECONDS: f32 = 60.0;
+/// Bounds one callback's worth of work at a fixed size, so the scratch
+/// buffers can be taken up front. Not a setting - it's about what the
+/// driver might hand us, not about how anyone wants the app to behave.
 const SCRATCH_CAPACITY: usize = 32768;
-const LATENCY_MS: f32 = 8.0;
 
 // Offered in settings, filtered to what the chosen device supports.
 const CANDIDATE_SAMPLE_RATES: [u32; 5] = [44_100, 48_000, 88_200, 96_000, 192_000];
@@ -125,20 +127,21 @@ fn open_device_and_config(
     Ok((device, config))
 }
 
-/// Opens `device_name` for input and output. Only `input_channel`
-/// (0-indexed) is captured, treated as mono and duplicated across every
-/// output channel; live input always passes through, recording/looping
-/// follows `control`. `LoopBuffer` lives only inside the output callback,
-/// so nothing here needs a lock.
+/// Opens the device named in `settings` for input and output. Only its
+/// chosen input channel is captured, treated as mono and duplicated
+/// across every output channel; live input always passes through,
+/// recording/looping follows `control`. `LoopStack` lives only inside the
+/// output callback, so nothing here needs a lock.
 pub fn build_looper_streams(
     control: Arc<SharedControl>,
-    device_name: &str,
-    sample_rate: u32,
-    input_channel: u16,
+    settings: &AppConfig,
 ) -> Result<(cpal::Stream, cpal::Stream, u32), String> {
-    let (device, config) = open_device_and_config(device_name, sample_rate)?;
+    let (device, config) = open_device_and_config(&settings.device_name, settings.sample_rate)?;
     let sample_rate = config.sample_rate;
     let channels = config.channels;
+    // Copied out of `settings` because the stream callbacks below have to
+    // own everything they use.
+    let input_channel = settings.input_channel;
     if input_channel >= channels {
         return Err(format!(
             "input channel {} is out of range (device has {channels} channel(s))",
@@ -148,7 +151,7 @@ pub fn build_looper_streams(
 
     // Just enough headroom between the callbacks to absorb timing jitter,
     // not a deliberate monitoring delay. Everything below is mono.
-    let latency_frames = ((LATENCY_MS / 1_000.0) * config.sample_rate as f32) as usize;
+    let latency_frames = (settings.latency_ms as usize * config.sample_rate as usize) / 1_000;
 
     // Dry passthrough bridge.
     let passthrough_ring = HeapRb::<i32>::new(latency_frames * 2);
@@ -162,8 +165,8 @@ pub fn build_looper_streams(
     let recorder_ring = HeapRb::<i32>::new(latency_frames * 2);
     let (mut recorder_tx, mut recorder_rx) = recorder_ring.split();
 
-    let loop_capacity = (MAX_LOOP_SECONDS * config.sample_rate as f32) as usize;
-    let mut stack = LoopStack::new(loop_capacity);
+    let loop_capacity = settings.max_loop_secs as usize * config.sample_rate as usize;
+    let mut stack = LoopStack::new(loop_capacity, settings.max_layers as usize);
     // The callback only ever sees the published state, so layer
     // bookkeeping keys off it changing - see `apply_state_change`.
     let mut previous_state = LoopState::Idle;

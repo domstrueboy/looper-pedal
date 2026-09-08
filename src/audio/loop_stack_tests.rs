@@ -1,9 +1,12 @@
 use super::*;
 
+/// The layer count is configurable; these tests pin one.
+const MAX_LAYERS: usize = 4;
+
 /// A stack holding one finished layer of `samples`, ready at the top of
 /// the loop.
 fn with_first_layer(samples: &[i32]) -> LoopStack {
-    let mut stack = LoopStack::new(16);
+    let mut stack = LoopStack::new(16, MAX_LAYERS);
     stack.begin_first_layer();
     stack.record_first_layer(samples);
     stack.finish_first_layer();
@@ -12,7 +15,7 @@ fn with_first_layer(samples: &[i32]) -> LoopStack {
 
 #[test]
 fn starts_empty() {
-    let stack = LoopStack::new(8);
+    let stack = LoopStack::new(8, MAX_LAYERS);
     assert!(stack.is_empty());
     assert_eq!(stack.recorded_len(), 0);
     assert_eq!(stack.layer_count(), 0);
@@ -20,7 +23,7 @@ fn starts_empty() {
 
 #[test]
 fn empty_stack_reads_silence() {
-    let mut stack = LoopStack::new(8);
+    let mut stack = LoopStack::new(8, MAX_LAYERS);
     let mut out = [7; 4];
     stack.read_mixed(&mut out, 100);
     assert_eq!(out, [0; 4]);
@@ -39,7 +42,7 @@ fn first_layer_records_and_plays_back() {
 
 #[test]
 fn first_layer_stops_at_capacity() {
-    let mut stack = LoopStack::new(4);
+    let mut stack = LoopStack::new(4, MAX_LAYERS);
     stack.begin_first_layer();
     assert_eq!(stack.record_first_layer(&[1, 2, 3, 4, 5, 6]), 4);
     stack.finish_first_layer();
@@ -164,7 +167,7 @@ fn a_second_overdub_pass_sums_into_the_same_layer() {
 
 #[test]
 fn refuses_to_overdub_an_empty_stack() {
-    let mut stack = LoopStack::new(8);
+    let mut stack = LoopStack::new(8, MAX_LAYERS);
     assert!(!stack.begin_overdub());
 }
 
@@ -262,7 +265,7 @@ fn stacked_layers_stay_recoverable_instead_of_clipping() {
 
 #[test]
 fn recorded_length_grows_while_the_first_take_runs() {
-    let mut stack = LoopStack::new(16);
+    let mut stack = LoopStack::new(16, MAX_LAYERS);
     stack.begin_first_layer();
     assert_eq!(stack.recorded_len(), 0);
 

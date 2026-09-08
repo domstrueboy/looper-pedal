@@ -1,7 +1,6 @@
 use std::time::Instant;
 
 use crate::app::Action;
-use crate::audio::loop_stack::MAX_LAYERS;
 use crate::audio::state_machine::LoopState;
 use crate::looper::LooperState;
 use crate::ui::indicator;
@@ -127,7 +126,7 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
 
                 ui.colored_label(
                     egui::Color32::WHITE,
-                    format!("Layers: {}/{}", looper.layer_count(), MAX_LAYERS),
+                    format!("Layers: {}/{}", looper.layer_count(), looper.max_layers()),
                 );
 
                 // Kept to three short lines: one long one would wrap

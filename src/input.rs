@@ -1,7 +1,5 @@
 use std::time::{Duration, Instant};
 
-const LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(2000);
-
 /// Turns "is it down right now" into short-press vs long-press-clear, like
 /// a real footswitch: long-press fires the moment the threshold is crossed,
 /// while still held; a short press fires on release, once it's known not to
@@ -14,13 +12,15 @@ pub enum InputEvent {
 }
 
 pub struct InputHandler {
+    long_press_threshold: Duration,
     pressed_at: Option<Instant>,
     long_press_fired: bool,
 }
 
 impl InputHandler {
-    pub fn new() -> Self {
+    pub fn new(long_press_threshold: Duration) -> Self {
         Self {
+            long_press_threshold,
             pressed_at: None,
             long_press_fired: false,
         }
@@ -42,7 +42,8 @@ impl InputHandler {
                     InputEvent::None
                 }
                 Some(pressed_at) => {
-                    if !self.long_press_fired && now.duration_since(pressed_at) >= LONG_PRESS_THRESHOLD
+                    if !self.long_press_fired
+                        && now.duration_since(pressed_at) >= self.long_press_threshold
                     {
                         self.long_press_fired = true;
                         InputEvent::LongPressClear
@@ -56,12 +57,6 @@ impl InputHandler {
         } else {
             InputEvent::None
         }
-    }
-}
-
-impl Default for InputHandler {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

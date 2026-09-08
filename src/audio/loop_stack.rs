@@ -1,9 +1,3 @@
-/// Most layers that can be stacked, the first recording included. Every
-/// layer is a full `capacity`-sized buffer allocated up front - nothing
-/// allocates on the audio thread - so this is a straight memory
-/// multiplier: ~11.5 MB per layer at 48 kHz with a 60s capacity.
-pub const MAX_LAYERS: usize = 4;
-
 /// One recorded layer, indexed by absolute position in the loop.
 ///
 /// An overdub starts wherever playback happens to be and can be stopped
@@ -49,7 +43,9 @@ impl Layer {
 /// as their sum. Layers are recorded and dropped independently, which is
 /// the same data model multitrack needs later.
 ///
-/// Nothing allocates outside `new`, so it's safe in a real-time callback.
+/// Nothing allocates outside `new`, so it's safe in a real-time callback -
+/// which is also why every layer is a full `capacity`-sized buffer taken
+/// up front, making the layer count a straight memory multiplier.
 pub struct LoopStack {
     layers: Vec<Layer>,
     /// How many layers hold a finished take.
@@ -66,9 +62,13 @@ pub struct LoopStack {
 }
 
 impl LoopStack {
-    pub fn new(capacity: usize) -> Self {
+    /// `max_layers` buffers of `capacity` samples each, allocated now and
+    /// never again.
+    pub fn new(capacity: usize, max_layers: usize) -> Self {
         Self {
-            layers: (0..MAX_LAYERS).map(|_| Layer::new(capacity)).collect(),
+            layers: (0..max_layers.max(1))
+                .map(|_| Layer::new(capacity))
+                .collect(),
             count: 0,
             loop_len: 0,
             play_pos: 0,
@@ -105,7 +105,7 @@ impl LoopStack {
     }
 
     pub fn is_full(&self) -> bool {
-        self.count >= MAX_LAYERS
+        self.count >= self.layers.len()
     }
 
     /// Starts the first layer, dropping whatever was there. The loop

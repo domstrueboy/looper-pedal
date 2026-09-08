@@ -10,6 +10,9 @@ winresource = "0.1"
 
 [dependencies]
 cpal = { version = "0.18.2", features = ["asio"] }
+directories = "6.0.0"
 eframe = { version = "0.36.1", features = ["glow"] }
 egui = "0.36.1"
 ringbuf = "0.5.1"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.5"

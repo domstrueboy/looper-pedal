@@ -58,8 +58,8 @@ src/
                               relay, the live streams, per-frame tick
   settings.rs                settings-screen state: device/rate/channel
                               lists and what's selected
-  config.rs                  persisted device/rate/input-channel choice
-                              (looper-pedal.cfg next to the exe)
+  config.rs                  the settings, as TOML in the per-user
+                              config dir (config_tests.rs)
   build.rs                   generates the .ico from `ui/icon.rs` and
                               embeds it as the exe's icon resource
   input.rs                   short-press vs long-press-clear detection
@@ -166,11 +166,52 @@ volume down still recovers it.
 
 On first run (or if the saved config no longer opens - e.g. the interface
 was unplugged), the app shows a Settings screen: pick the ASIO device,
-sample rate, and which input channel to use. On "Start" this is saved to
-`looper-pedal.cfg` next to the executable and the app launches straight
-into the looper on subsequent runs. The gear icon (top-right, in the
-looper screen) reopens Settings at any time, pre-selecting whatever's
-currently active.
+sample rate, input channel, loop volume and record delay. On "Start" this
+is saved and the app launches straight into the looper on subsequent
+runs. The gear icon (top-right, in the looper screen) reopens Settings at
+any time, pre-selecting whatever's currently active.
+
+Settings are TOML in the per-user config directory:
+
+- Windows: `%APPDATA%\looper-pedal\config.toml`
+- Linux: `~/.config/looper-pedal/config.toml`
+- macOS: `~/Library/Application Support/looper-pedal/config.toml`
+
+Next to the executable - where they used to live - stops being writable
+the moment the app is installed somewhere like Program Files, and the
+recorded loop will want a per-user directory of its own soon anyway.
+
+`device_name` and `sample_rate` are required; everything else falls back
+to a default, so a config written by an older build still loads instead
+of throwing you back to the settings screen. Unknown keys are ignored,
+and comments are allowed, so the file is safe to hand-edit. A
+pre-existing `looper-pedal.cfg` next to the executable is read once and
+rewritten in the new place and format; the old file is left alone.
+
+Every setting's default and allowed range is declared once, in
+`config.rs`: the settings screen builds its sliders from those ranges,
+and a hand-edited file is clamped to them on load. Nine hundred layers
+of a two-hour loop would otherwise try to allocate terabytes before the
+window opened.
+
+| Setting | Default | Range | Effect |
+|---|---|---|---|
+| `volume_pct` | 100 | 0-200 | loop playback gain, live signal untouched |
+| `preroll_ms` | 5000 | 0-5000 | wait before recording starts; 0 = off |
+| `long_press_ms` | 2000 | 500-4000 | how long a hold clears the loop |
+| `latency_ms` | 8 | 2-50 | callback headroom - raise it if the log reports underruns |
+| `max_loop_secs` | 60 | 10-120 | longest recordable loop |
+| `max_layers` | 4 | 1-8 | layers including the first recording |
+
+The last two are a memory multiplier - every layer is pre-allocated at
+the full loop length, so it costs `seconds x layers x sample rate x 4`
+bytes, and the settings screen shows the figure next to the sliders.
+
+Deliberately *not* settings: `SCRATCH_CAPACITY` (how much of one
+callback the fixed scratch buffers cover - about what a driver might
+hand us, not about how anyone wants the app to behave),
+`CANDIDATE_SAMPLE_RATES` (a probe list, not a choice), and the window
+and widget sizes.
 
 ## Build prerequisites (Windows)
 

@@ -118,26 +118,28 @@ Discard the stored loop if its sample rate doesn't match the stream
 being opened - no resampling. Long-press-clear drops the stored copy
 too. Write on exit, not per frame.
 
-### 6. Settings in a real config file
+### 6. Settings in a real config file - done
 
-Replace `config.rs`'s hand-rolled `key=value` parser with TOML (`serde`
-+ `toml` - comments are allowed and it's what the Rust ecosystem
-speaks), stored in the per-user config directory via `directories`
-instead of next to the executable:
+TOML via `serde` + `toml`, in the per-user config directory found with
+`directories` - see README's settings section for the paths and the
+compatibility rules. `device_name` and `sample_rate` are required,
+everything else defaults, so adding a setting can't invalidate an
+existing file. An old `looper-pedal.cfg` next to the executable is read
+once and rewritten in the new place; that reader is marked as removable
+once no such file is likely to be left.
 
-- Windows: `%APPDATA%\looper-pedal\config.toml`
-- Linux: `~/.config/looper-pedal/config.toml`
-- macOS: `~/Library/Application Support/looper-pedal/config.toml`
+Deps added as planned, the one deliberate exception to minimal-deps:
+`serde`, `toml`, `directories`.
 
-Next to the exe stops being writable the moment the app is installed
-somewhere like Program Files, and step 5 needs a per-user directory
-anyway - so do this before or together with 5, rather than writing loop
-state next to the exe and then moving it.
+Step 5 can now put the recorded loop next to the config rather than next
+to the exe.
 
-This is the one place the minimal-deps rule is deliberately traded away
-(`serde`, `toml`, `directories`): the bespoke parser stopped paying once
-the field count grew. Optionally migrate an existing `looper-pedal.cfg`
-once, so the saved device choice survives the move.
+Settings that used to be constants moved into the config and onto the
+screen at the same time: latency, max loop length, max layers and the
+hold-to-clear time. Each one's default and range live together in
+`config.rs`, the sliders are built from those ranges, and a hand-edited
+file is clamped to them - see README's settings table. The screen scrolls
+now, with Start pinned below it.
 
 ### 7. Mic channel, cheap subset (optional)
 

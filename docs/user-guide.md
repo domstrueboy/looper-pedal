@@ -22,11 +22,28 @@ The first time you launch the app, you'll see a **Settings** screen:
    actually starts capturing, so you have time to get your hands back on
    the guitar. Defaults to **5 seconds**; drag it down to **off** if
    you'd rather it start immediately.
+6. **Hold to clear** - how long the button or spacebar has to be held
+   down to wipe the loop. Two seconds by default.
+7. **Latency** - how much headroom the audio engine keeps. Lower feels
+   more immediate; if the sound crackles or drops out, raise it.
+8. **Max loop length** and **Max layers** - the longest loop you can
+   record and how many layers you can stack. Both are reserved in
+   memory up front, so the line underneath tells you what your choices
+   will cost - there's no reason to ask for more than you'll use.
 
 Click **Start**. Your choices are remembered, so next time the app opens
 straight into the looper - you won't see Settings again unless you
 reopen it yourself (see below) or your saved device becomes unavailable
 (e.g. the interface is unplugged).
+
+They're kept in a small text file you can read or edit by hand if you
+ever want to:
+
+- Windows: `%APPDATA%\looper-pedal\config.toml`
+- Linux: `~/.config/looper-pedal/config.toml`
+- macOS: `~/Library/Application Support/looper-pedal/config.toml`
+
+Delete it to start over from the Settings screen.
 
 ## Using the looper
 

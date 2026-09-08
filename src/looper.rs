@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::audio::engine;
-use crate::audio::loop_stack::MAX_LAYERS;
 use crate::audio::shared_control::SharedControl;
 use crate::audio::state_machine::{LoopState, LoopStateMachine};
 use crate::config::AppConfig;
@@ -26,6 +25,10 @@ pub struct LooperState {
     /// Set while a pre-roll is counting down, cleared the moment it
     /// elapses or is called off.
     armed_at: Option<Instant>,
+    /// Kept here as well as in the layer stack, which lives on the audio
+    /// thread out of reach - the UI needs it to show "n/max" and to know
+    /// when overdubbing is still possible.
+    max_layers: usize,
     sample_rate: u32,
     _input_stream: cpal::Stream,
     _output_stream: cpal::Stream,
@@ -36,19 +39,18 @@ impl LooperState {
     /// device/rate mismatches are user-recoverable, not bugs.
     pub fn start(config: &AppConfig) -> Result<Self, String> {
         let control = Arc::new(SharedControl::new(config.volume_pct));
-        let (_input_stream, _output_stream, sample_rate) = engine::build_looper_streams(
-            Arc::clone(&control),
-            &config.device_name,
-            config.sample_rate,
-            config.input_channel,
-        )?;
+        let (_input_stream, _output_stream, sample_rate) =
+            engine::build_looper_streams(Arc::clone(&control), config)?;
         Ok(Self {
             control,
             state_machine: LoopStateMachine::new(),
-            input_handler: InputHandler::new(),
+            input_handler: InputHandler::new(Duration::from_millis(u64::from(
+                config.long_press_ms,
+            ))),
             button_held: false,
             preroll: Duration::from_millis(u64::from(config.preroll_ms)),
             armed_at: None,
+            max_layers: config.max_layers as usize,
             sample_rate,
             _input_stream,
             _output_stream,
@@ -73,11 +75,15 @@ impl LooperState {
         self.control.layer_count()
     }
 
+    pub fn max_layers(&self) -> usize {
+        self.max_layers
+    }
+
     /// Whether the overdub control would do anything: there has to be a
     /// loop playing, and a layer left to record into.
     pub fn can_overdub(&self) -> bool {
         match self.state() {
-            LoopState::Looping => self.layer_count() < MAX_LAYERS,
+            LoopState::Looping => self.layer_count() < self.max_layers,
             LoopState::Overdubbing => true,
             _ => false,
         }

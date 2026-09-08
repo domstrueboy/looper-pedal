@@ -1,12 +1,23 @@
 use super::*;
 
+/// The hold time is configurable now; these tests pin one so the timings
+/// below mean something.
+const THRESHOLD: Duration = Duration::from_millis(2000);
+
+fn handler() -> InputHandler {
+    InputHandler::new(THRESHOLD)
+}
+
 #[test]
 fn press_then_quick_release_yields_short_press() {
-    let mut input = InputHandler::new();
+    let mut input = handler();
     let t0 = Instant::now();
 
     assert_eq!(input.update(true, t0), InputEvent::None);
-    assert_eq!(input.update(true, t0 + Duration::from_millis(100)), InputEvent::None);
+    assert_eq!(
+        input.update(true, t0 + Duration::from_millis(100)),
+        InputEvent::None
+    );
     assert_eq!(
         input.update(false, t0 + Duration::from_millis(150)),
         InputEvent::ShortPress
@@ -15,7 +26,7 @@ fn press_then_quick_release_yields_short_press() {
 
 #[test]
 fn holding_past_threshold_yields_long_press_clear_while_still_held() {
-    let mut input = InputHandler::new();
+    let mut input = handler();
     let t0 = Instant::now();
 
     assert_eq!(input.update(true, t0), InputEvent::None);
@@ -27,7 +38,7 @@ fn holding_past_threshold_yields_long_press_clear_while_still_held() {
 
 #[test]
 fn releasing_after_long_press_does_not_also_fire_short_press() {
-    let mut input = InputHandler::new();
+    let mut input = handler();
     let t0 = Instant::now();
 
     input.update(true, t0);
@@ -43,7 +54,7 @@ fn releasing_after_long_press_does_not_also_fire_short_press() {
 
 #[test]
 fn long_press_fires_only_once_per_hold() {
-    let mut input = InputHandler::new();
+    let mut input = handler();
     let t0 = Instant::now();
 
     input.update(true, t0);
@@ -59,14 +70,14 @@ fn long_press_fires_only_once_per_hold() {
 
 #[test]
 fn releasing_without_ever_pressing_yields_none() {
-    let mut input = InputHandler::new();
+    let mut input = handler();
     let t0 = Instant::now();
     assert_eq!(input.update(false, t0), InputEvent::None);
 }
 
 #[test]
 fn can_short_press_again_after_a_short_press() {
-    let mut input = InputHandler::new();
+    let mut input = handler();
     let t0 = Instant::now();
 
     input.update(true, t0);
@@ -85,7 +96,7 @@ fn can_short_press_again_after_a_short_press() {
 
 #[test]
 fn is_long_press_active_only_between_firing_and_release() {
-    let mut input = InputHandler::new();
+    let mut input = handler();
     let t0 = Instant::now();
 
     input.update(true, t0);
@@ -103,7 +114,7 @@ fn is_long_press_active_only_between_firing_and_release() {
 
 #[test]
 fn can_press_again_after_a_long_press_clear() {
-    let mut input = InputHandler::new();
+    let mut input = handler();
     let t0 = Instant::now();
 
     input.update(true, t0);

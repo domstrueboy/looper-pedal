@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
-use super::state_machine::LoopState;
+use crate::state_machine::LoopState;
 
 /// Lock-free relay across the UI/audio thread boundary. The state machine
 /// stays single-owner on the UI thread (`looper.rs`); only its resulting

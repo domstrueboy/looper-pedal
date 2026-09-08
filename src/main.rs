@@ -10,19 +10,34 @@ mod input;
 mod loop_mirror;
 mod looper;
 mod settings;
+mod state_machine;
 mod ui;
 mod wav;
 
+use std::time::Instant;
+
 use app::{App, Screen};
 
-/// Hands each frame to a screen renderer and applies the action it returns.
-/// This and `ui/` are the only framework-aware code - swapping GUI library
-/// rewrites them, not the app.
+/// Advances the looper, hands the frame to a screen renderer, and applies
+/// the action it returns. This and `ui/` are the only framework-aware code
+/// - swapping GUI library rewrites them, not the app.
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let action = match &mut self.screen {
             Screen::Settings(settings) => ui::settings::render(ui, settings),
-            Screen::Looper(looper) => ui::looper::render(ui, looper),
+            Screen::Looper(looper) => {
+                // Long-press detection and the pre-roll countdown need
+                // continuous frames, not just input-triggered repaints.
+                ui.ctx().request_repaint();
+                // Advanced before the frame is drawn rather than part-way
+                // through drawing it, so `ui/` only ever reports intent
+                // and every widget reads the same state: the button used
+                // to show what the indicator below it had already moved
+                // past, for one frame, whenever a pre-roll ran out.
+                let space_down = ui.ctx().input(|i| i.key_down(egui::Key::Space));
+                looper.tick(space_down, Instant::now());
+                ui::looper::render(ui, looper)
+            }
         };
 
         if let Some(action) = action {

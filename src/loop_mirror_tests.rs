@@ -4,12 +4,38 @@ use ringbuf::traits::{Producer, Split};
 use ringbuf::{HeapProd, HeapRb};
 
 use crate::audio::loop_stack::LoopStack;
+use crate::config::*;
 
 const RATE: u32 = 44_100;
 
+/// A loop is measured in seconds against `max_loop_secs`, so the tests
+/// about that limit run at 1 Hz: three samples is a three-second loop,
+/// which keeps them readable instead of megabyte-sized.
+const SLOW: u32 = 1;
+
 fn new_mirror() -> (HeapProd<i32>, LoopMirror) {
+    new_mirror_at(RATE)
+}
+
+fn new_mirror_at(sample_rate: u32) -> (HeapProd<i32>, LoopMirror) {
     let (producer, consumer) = HeapRb::<i32>::new(1024).split();
-    (producer, LoopMirror::new(consumer, RATE, Vec::new()))
+    (producer, LoopMirror::new(consumer, sample_rate, Vec::new()))
+}
+
+/// What a saved loop is checked against on the way back in. Limits are
+/// the defaults unless a test is specifically about one of them.
+fn settings(sample_rate: u32) -> AppConfig {
+    AppConfig {
+        device_name: String::new(),
+        sample_rate,
+        input_channel: 0,
+        volume_pct: DEFAULT_VOLUME_PCT,
+        preroll_ms: DEFAULT_PREROLL_MS,
+        latency_ms: DEFAULT_LATENCY_MS,
+        max_loop_secs: DEFAULT_MAX_LOOP_SECS,
+        max_layers: DEFAULT_MAX_LAYERS,
+        long_press_ms: DEFAULT_LONG_PRESS_MS,
+    }
 }
 
 /// One take, driven the way a frame loop would: the state changes, the
@@ -240,12 +266,12 @@ fn a_saved_loop_comes_back_layer_for_layer() {
     );
 
     mirror.save(&directory).expect("saves");
-    let loaded = load(&directory, RATE);
+    let loaded = load(&directory, &settings(RATE));
 
     assert_eq!(loaded, vec![vec![1, 2, 3], vec![4, 5, 6]]);
 
     delete(&directory);
-    assert!(load(&directory, RATE).is_empty(), "deleted");
+    assert!(load(&directory, &settings(RATE)).is_empty(), "deleted");
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -257,8 +283,8 @@ fn a_loop_recorded_at_another_rate_is_not_loaded() {
     mirror.save(&directory).expect("saves");
 
     // No resampling, so a rate change means the loop is unusable.
-    assert!(load(&directory, 48_000).is_empty());
-    assert_eq!(load(&directory, RATE).len(), 1);
+    assert!(load(&directory, &settings(48_000)).is_empty());
+    assert_eq!(load(&directory, &settings(RATE)).len(), 1);
 
     let _ = std::fs::remove_dir_all(&directory);
 }
@@ -273,6 +299,105 @@ fn a_gap_in_what_arrived_stops_the_loop_being_saved() {
 
     // Better no save than one that doesn't match what was played.
     assert!(mirror.save(&directory).is_err());
-    assert!(load(&directory, RATE).is_empty());
+    assert!(load(&directory, &settings(RATE)).is_empty());
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_fresh_loop_can_be_saved_again_after_a_gap() {
+    let directory = temp_dir("lost-then-cleared");
+    let (mut input, mut mirror) = new_mirror();
+    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    mirror.note_lost_samples();
+    assert!(mirror.save(&directory).is_err());
+
+    // Clearing throws away the takes the gap applied to, so there is
+    // nothing left for it to be right about. Latching it for the whole
+    // session would quietly stop saving anything ever again.
+    mirror.clear();
+    record(&mut input, &mut mirror, LoopState::Recording, &[3, 4], 2, 0);
+    mirror.save(&directory).expect("a loop recorded since the gap saves");
+    assert_eq!(load(&directory, &settings(RATE)), vec![vec![3, 4]]);
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn recording_over_a_lost_loop_makes_it_savable_again() {
+    let directory = temp_dir("lost-then-rerecorded");
+    let (mut input, mut mirror) = new_mirror();
+    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    mirror.note_lost_samples();
+
+    // No clear in between: a first take replaces the whole loop by
+    // itself, so the gap no longer applies to anything held.
+    record(&mut input, &mut mirror, LoopState::Recording, &[5, 6, 7], 3, 0);
+    mirror.save(&directory).expect("saves");
+    assert_eq!(load(&directory, &settings(RATE)), vec![vec![5, 6, 7]]);
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_loop_longer_than_the_setting_now_allows_is_not_loaded() {
+    let directory = temp_dir("too-long");
+    let (mut input, mut mirror) = new_mirror_at(SLOW);
+    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2, 3], 3, 0);
+    mirror.save(&directory).expect("saves");
+
+    let mut tightened = settings(SLOW);
+    tightened.max_loop_secs = 2;
+    assert!(
+        load(&directory, &tightened).is_empty(),
+        "a three-second loop does not fit a two-second limit"
+    );
+
+    tightened.max_loop_secs = 3;
+    assert_eq!(load(&directory, &tightened).len(), 1, "three fits three");
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn layers_past_the_setting_are_dropped_and_the_rest_still_load() {
+    let directory = temp_dir("too-many");
+    let (mut input, mut mirror) = new_mirror();
+    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Overdubbing, &[3, 4], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Overdubbing, &[5, 6], 2, 0);
+    mirror.save(&directory).expect("saves");
+
+    let mut fewer = settings(RATE);
+    fewer.max_layers = 2;
+    // Layers are independent takes, so the ones underneath are still
+    // exactly what was played - only what no longer fits goes.
+    assert_eq!(
+        load(&directory, &fewer),
+        vec![vec![1, 2], vec![3, 4]],
+        "the layers that still fit come back"
+    );
+
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_first_take_that_captured_nothing_clears_the_saved_loop() {
+    let directory = temp_dir("empty-retake");
+    let (mut input, mut mirror) = new_mirror();
+    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    mirror.save(&directory).expect("saves");
+    assert_eq!(load(&directory, &settings(RATE)).len(), 1);
+
+    // Record pressed and undone before a single sample arrived.
+    mirror.tick(LoopState::Recording, 2, 0);
+    let out_of_date = mirror.tick(LoopState::Looping, 0, 0);
+
+    assert!(out_of_date, "the loop is gone, so the saved copy is stale");
+    mirror.save(&directory).expect("saves");
+    assert!(
+        load(&directory, &settings(RATE)).is_empty(),
+        "otherwise the old loop comes back at the next launch"
+    );
+
     let _ = std::fs::remove_dir_all(&directory);
 }

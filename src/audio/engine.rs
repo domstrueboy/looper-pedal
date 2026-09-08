@@ -8,8 +8,8 @@ use ringbuf::{
 
 use super::loop_stack::LoopStack;
 use super::shared_control::SharedControl;
-use super::state_machine::LoopState;
 use crate::config::AppConfig;
+use crate::state_machine::LoopState;
 
 /// Bounds one callback's worth of work at a fixed size, so the scratch
 /// buffers can be taken up front. Not a setting - it's about what the
@@ -147,8 +147,8 @@ pub struct LooperStreams {
 /// across every output channel; live input always passes through,
 /// recording/looping follows `control`. `LoopStack` lives only inside the
 /// output callback, so nothing here needs a lock.
-/// `restored` seeds the layer stack with a loop saved earlier; layers
-/// that don't fit the current settings are skipped.
+/// `restored` seeds the layer stack with a loop saved earlier, already
+/// held to these settings by `loop_mirror::load`.
 pub fn build_looper_streams(
     control: Arc<SharedControl>,
     settings: &AppConfig,
@@ -191,9 +191,11 @@ pub fn build_looper_streams(
     let loop_capacity = settings.max_loop_secs as usize * config.sample_rate as usize;
     let mut stack = LoopStack::new(loop_capacity, settings.max_layers as usize);
     for layer in restored {
-        if !stack.add_layer(layer) {
-            break;
-        }
+        let added = stack.add_layer(layer);
+        // Anything `loop_mirror::load` handed back fits by construction.
+        // Dropping one quietly here would leave the UI thread's copy
+        // holding layers that aren't playing.
+        debug_assert!(added, "a restored layer should fit the settings it was loaded for");
     }
     // The callback only ever sees the published state, so layer
     // bookkeeping keys off it changing - see `apply_state_change`.

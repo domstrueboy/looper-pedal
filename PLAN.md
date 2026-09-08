@@ -89,9 +89,9 @@ like the looping and recording readouts rather than as its own thing. A
 lone number on the button read as ambiguous, and a bar's own `text` sits
 on the left in egui, where a shrinking number behind a growing fill
 reads as a contradiction. First recording only; a press part-way through
-calls it off, and the button shows a cancel cross to say so. The audio callback treats
-`Arming` exactly like `Idle`, so no timing code went near it - see
-README's pre-roll section.
+calls it off, and the button shows a cancel cross to say so. The audio
+callback treats `Arming` exactly like `Idle`, so no timing code went
+near it - see README's pre-roll section.
 
 `Arming` is published rather than hidden from the audio thread on
 purpose: v3's metronome count-in is this same window with clicks in it,
@@ -201,6 +201,13 @@ A deliberate pass over the whole codebase once step 5 lands, rather
 than more features. Everything below has grown by accretion across
 seven steps; this is where it gets read as a whole for the first time.
 
+**Do this in a fresh session, deliberately.** Whoever built the code
+remembers why every line is there, which is the one thing a reviewer
+must not have - "I remember why this is fine" is how a review of your
+own work becomes a defence of it. Reading it cold is the point: the
+places where working out the intent is hard are exactly the findings
+worth having. The brief here plus README is enough orientation.
+
 - **KISS.** Look for machinery that outgrew its problem - anything
   that could be a plain function, a smaller type, or simply deleted.
   Every abstraction should be paying for itself.
@@ -225,7 +232,55 @@ seven steps; this is where it gets read as a whole for the first time.
 Worth doing *before* the v3 workspace split, since that split is easier
 to draw around modules that are already clean.
 
+### Load-bearing, despite appearances
+
+The cost of reading cold: these all look like dead weight and are not.
+Each one is either a bug that has already happened once or a real-time
+constraint. Check the reason before touching them - README and the
+tests cover every one.
+
+- **`button_held` in `looper.rs`** - a latch, rather than asking egui
+  whether the pointer is on the button. egui reads a cursor drifting off
+  the button as a release, which broke long-press-clear from the button
+  once already.
+- **Mixing before writing in `read_mixed_with_overdub`** - the take is
+  mixed into the output *before* the incoming sample is recorded over
+  it. Reverse the order and the player hears their own take echoed back
+  on top of their live signal a buffer later.
+- **64-bit sum, then gain, then clamp** (`mix_at` / `scale_and_clamp`) -
+  clamping per layer in 32-bit made a hot four-layer stack permanently
+  clipped, with the volume slider unable to rescue it.
+- **The recorded window (`start` / `written`) in `Layer`** - not an
+  optimisation for its own sake. It's what lets a layer be reused
+  without memsetting megabytes inside the audio callback, and the
+  alternative is unbounded work in the real-time path.
+- **`recorded_len` separate from `loop_len` in `LoopStack`** - one is
+  how much has been recorded, the other is where playback wraps.
+  Conflating them made the elapsed time read zero for a whole take.
+- **`Arming` published to the audio thread** rather than hidden behind
+  `Idle`, which would work today. v3's count-in needs the callback to
+  know it's counting down.
+- **`SCRATCH_CAPACITY` chunking in both callbacks** - bounds one
+  callback's work whatever the driver hands us. Overrunning the fixed
+  scratch buffers would panic inside the real-time path.
+
+The one genuine duplicate to consider merging: take layout exists twice,
+incrementally in `read_mixed_with_overdub` and in one go in
+`LoopMirror::layer`, with a test asserting they agree.
+
 ## v3: extended build
+
+Not startable as written - it's a list of components, not an order.
+Two things to settle first, at the top of a v3 session:
+
+- **Decide loop / bar-grid sync** (see Open decisions). It gates the
+  metronome *and* the drum machine, and if loops become bar-quantized
+  the saved loop will want its BPM and bar count stored alongside it.
+- **Order the work**, the way v2 was ordered. The dependencies:
+  per-layer mute finishes the track abstraction, which the mic track
+  needs; one scheduler underpins the metronome, which the drum machine
+  is a richer version of; the workspace split is easiest once the
+  review has settled the module boundaries.
 
 Still "run and play", not a DAW: preconfigured mic + guitar tracks, a
 few more if wanted, metronome, drum machine, tuner - kept as small and

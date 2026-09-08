@@ -1,7 +1,5 @@
-use std::time::Instant;
-
 use crate::app::Action;
-use crate::audio::state_machine::LoopState;
+use crate::state_machine::LoopState;
 use crate::looper::LooperState;
 use crate::ui::indicator;
 
@@ -9,8 +7,8 @@ use crate::ui::indicator;
 /// centered without laying it out twice.
 const CONTROL_BUTTON_SIZE: [f32; 2] = [118.0, 24.0];
 
-/// Gathered fresh each time it's needed: the values change as the frame
-/// advances the looper.
+/// Everything the screen says about the current state, gathered once per
+/// frame so that no two widgets can disagree about it.
 fn readout(looper: &LooperState) -> indicator::Readout {
     let (loop_duration_secs, progress_fraction) = looper.loop_duration_and_progress();
     indicator::Readout {
@@ -23,20 +21,17 @@ fn readout(looper: &LooperState) -> indicator::Readout {
 }
 
 pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
-    // Long-press detection needs continuous frames, not just
-    // input-triggered repaints.
-    ui.ctx().request_repaint();
-
     let mut action = None;
-    let (space_down, overdub_pressed, remove_pressed) = ui.ctx().input(|i| {
+    let (overdub_pressed, remove_pressed) = ui.ctx().input(|i| {
         (
-            i.key_down(egui::Key::Space),
             // Edge-triggered, unlike the main control: neither of these
-            // has a long-press meaning, so there's nothing to time.
+            // has a long-press meaning, so there's nothing to time. The
+            // spacebar is read where the looper is ticked, in `main.rs`.
             i.key_pressed(egui::Key::O),
             i.key_pressed(egui::Key::R),
         )
     });
+    let readout = readout(looper);
 
     egui::Frame::default()
         .inner_margin(egui::Margin::same(16))
@@ -59,14 +54,15 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
                 // Button and spacebar feed one InputHandler (see
                 // `LooperState::tick`), so they can't desync.
                 let label =
-                    indicator::press_button_label(&readout(looper), looper.is_long_press_active());
+                    indicator::press_button_label(&readout, looper.is_long_press_active());
                 let button_response = ui.add_sized(
                     [90.0, 90.0],
                     egui::Button::new(egui::RichText::new(label).size(32.0)).corner_radius(45),
                 );
 
                 // Latched, not `is_pointer_button_down_on()` - see
-                // `button_held` in `LooperState`.
+                // `button_held` in `LooperState`. Read by the next
+                // frame's tick, which is what the latch is for.
                 if button_response.is_pointer_button_down_on() {
                     looper.set_button_held(true);
                 }
@@ -74,10 +70,8 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
                     looper.set_button_held(false);
                 }
 
-                looper.tick(space_down, Instant::now());
-
                 ui.add_space(4.0);
-                indicator::state_indicator(ui, &readout(looper));
+                indicator::state_indicator(ui, &readout);
 
                 // Allocated at exactly the row's own width so the
                 // centering layout above can center it - a plain

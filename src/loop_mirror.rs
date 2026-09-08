@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use ringbuf::HeapCons;
 use ringbuf::traits::Consumer;
 
-use crate::audio::state_machine::LoopState;
+use crate::state_machine::LoopState;
+use crate::config::AppConfig;
 use crate::wav;
 
 /// More layers than any config allows, so a stale file from a bigger
@@ -36,8 +37,11 @@ pub struct LoopMirror {
     loop_len: usize,
     sample_rate: u32,
     save_pending: bool,
-    /// Set if the ring ever overflowed: this copy no longer matches what
-    /// is playing, so it must not be written over a good save.
+    /// Set if the capture ring overflowed while a take was open: the
+    /// takes held here no longer match what is playing, so they must not
+    /// be written over a good save. Cleared once the takes it applies to
+    /// are gone - a fresh loop is trustworthy again, and latching it for
+    /// the whole session would silently stop saving anything.
     lost_samples: bool,
 }
 
@@ -107,9 +111,11 @@ impl LoopMirror {
 
         if capturing && !was_capturing {
             if state == LoopState::Recording {
-                // The first take of a new loop replaces everything.
+                // The first take of a new loop replaces everything -
+                // including any doubt about what the old one held.
                 self.finished.clear();
                 self.loop_len = 0;
+                self.lost_samples = false;
             }
             self.open_take = Some(Vec::new());
         } else if was_capturing && !capturing {
@@ -127,6 +133,12 @@ impl LoopMirror {
                     samples: take,
                 });
                 self.save_pending = true;
+            } else if self.previous_state == LoopState::Recording {
+                // Record pressed and undone before a sample arrived: the
+                // old loop has been replaced by no loop. No length is
+                // coming to wait for, so the copy on disk is stale as of
+                // now - left alone it would come back at the next launch.
+                out_of_date = true;
             }
         }
 
@@ -143,6 +155,7 @@ impl LoopMirror {
         self.open_take = None;
         self.loop_len = 0;
         self.save_pending = false;
+        self.lost_samples = false;
     }
 
     /// Writes every layer into `directory` as a WAV, replacing whatever
@@ -193,17 +206,26 @@ impl LoopMirror {
     }
 }
 
-/// The layers of a saved loop, in order. Empty if there isn't one, if it
-/// was recorded at a different sample rate (there's no resampling), or if
-/// the files don't agree on a length.
-pub fn load(directory: &Path, sample_rate: u32) -> Vec<Vec<i32>> {
+/// The layers of a saved loop, in order, or nothing if there isn't one or
+/// it no longer fits `settings`.
+///
+/// Every rule about whether a saved loop still applies lives here, so the
+/// layer stack and the mirror are seeded from the same list. Seeding them
+/// from different ones leaves the UI counting layers that aren't playing.
+///
+/// A loop is dropped whole if it was recorded at another sample rate
+/// (there's no resampling), if the files disagree on a length, or if it
+/// is longer than `max_loop_secs` now allows. Layers past `max_layers`
+/// are dropped individually instead - they're independent takes, so the
+/// ones underneath are still exactly what was played.
+pub fn load(directory: &Path, settings: &AppConfig) -> Vec<Vec<i32>> {
     let mut layers: Vec<Vec<i32>> = Vec::new();
 
     for index in 0..MAX_SAVED_LAYERS {
         let Some((samples, rate)) = wav::read(&layer_path(directory, index)) else {
             break;
         };
-        if rate != sample_rate || samples.is_empty() {
+        if rate != settings.sample_rate || samples.is_empty() {
             return Vec::new();
         }
         if layers
@@ -215,6 +237,11 @@ pub fn load(directory: &Path, sample_rate: u32) -> Vec<Vec<i32>> {
         layers.push(samples);
     }
 
+    let capacity = settings.max_loop_secs as usize * settings.sample_rate as usize;
+    if layers.first().is_some_and(|first| first.len() > capacity) {
+        return Vec::new();
+    }
+    layers.truncate(settings.max_layers as usize);
     layers
 }
 

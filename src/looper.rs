@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use crate::audio::engine;
 use crate::audio::shared_control::SharedControl;
-use crate::audio::state_machine::{LoopState, LoopStateMachine};
+use crate::state_machine::{LoopState, LoopStateMachine};
 use crate::config::{self, AppConfig};
 use crate::input::{InputEvent, InputHandler};
 use crate::loop_mirror::{self, LoopMirror};
@@ -45,7 +45,7 @@ impl LooperState {
         let control = Arc::new(SharedControl::new(settings.volume_pct));
         // Whatever was left from last time, if it still fits what's
         // configured now.
-        let restored = loop_mirror::load(&config::loop_dir(), settings.sample_rate);
+        let restored = loop_mirror::load(&config::loop_dir(), settings);
         let streams = engine::build_looper_streams(Arc::clone(&control), settings, &restored)?;
 
         // A restored loop is there, but silent until it's asked for.

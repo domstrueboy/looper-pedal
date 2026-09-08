@@ -64,6 +64,8 @@ src/
                               embeds it as the exe's icon resource
   input.rs                   short-press vs long-press-clear detection
                               (input_tests.rs)
+  state_machine.rs           the pedal logic - pure, no audio and no
+                              egui (state_machine_tests.rs)
   loop_mirror.rs             the UI thread's own copy of the loop, and
                               saving it (loop_mirror_tests.rs)
   wav.rs                     mono 32-bit PCM, by hand (wav_tests.rs)
@@ -73,8 +75,6 @@ src/
     shared_control.rs         lock-free UI <-> audio thread relay
     loop_stack.rs              pre-allocated stack of aligned mono loop
                               layers (loop_stack_tests.rs)
-    state_machine.rs           the pedal logic, pure/no audio
-                              (state_machine_tests.rs)
   ui/                        rendering only - each screen is a
                               `render(ui, model) -> Option<Action>` fn
     looper.rs                 the looper screen

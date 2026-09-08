@@ -79,9 +79,13 @@ the settings screen shows it.
 
 An `Arming` state advanced by the UI frame loop, with a 0-5s "Record
 delay" slider in Settings, defaulting to 5s and reading "off" at zero.
-The wait shows as a progress bar filling, not a number counting down -
-a lone number on the button turned out to be ambiguous. First recording
-only; a press part-way through calls it off. The audio callback treats
+The wait shows as the seconds counting down where the recording time
+normally appears, over a light gray bar filling beneath it - laid out
+like the looping and recording readouts rather than as its own thing. A
+lone number on the button read as ambiguous, and a bar's own `text` sits
+on the left in egui, where a shrinking number behind a growing fill
+reads as a contradiction. First recording only; a press part-way through
+calls it off, and the button shows a cancel cross to say so. The audio callback treats
 `Arming` exactly like `Idle`, so no timing code went near it - see
 README's pre-roll section.
 

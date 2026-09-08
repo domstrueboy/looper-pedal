@@ -14,7 +14,7 @@ fn with_first_layer(samples: &[i32]) -> LoopStack {
 fn starts_empty() {
     let stack = LoopStack::new(8);
     assert!(stack.is_empty());
-    assert_eq!(stack.len(), 0);
+    assert_eq!(stack.recorded_len(), 0);
     assert_eq!(stack.layer_count(), 0);
 }
 
@@ -29,7 +29,7 @@ fn empty_stack_reads_silence() {
 #[test]
 fn first_layer_records_and_plays_back() {
     let mut stack = with_first_layer(&[1, 2, 3, 4]);
-    assert_eq!(stack.len(), 4);
+    assert_eq!(stack.recorded_len(), 4);
     assert_eq!(stack.layer_count(), 1);
 
     let mut out = [0; 4];
@@ -43,7 +43,7 @@ fn first_layer_stops_at_capacity() {
     stack.begin_first_layer();
     assert_eq!(stack.record_first_layer(&[1, 2, 3, 4, 5, 6]), 4);
     stack.finish_first_layer();
-    assert_eq!(stack.len(), 4);
+    assert_eq!(stack.recorded_len(), 4);
 }
 
 #[test]
@@ -215,7 +215,7 @@ fn removing_the_only_layer_empties_the_loop() {
     let mut stack = with_first_layer(&[1, 2]);
     stack.remove_last_layer();
     assert!(stack.is_empty());
-    assert_eq!(stack.len(), 0);
+    assert_eq!(stack.recorded_len(), 0);
 }
 
 #[test]
@@ -258,4 +258,32 @@ fn stacked_layers_stay_recoverable_instead_of_clipping() {
     let mut turned_down = [0; 2];
     stack.read_mixed(&mut turned_down, 25);
     assert_eq!(turned_down, [loud, loud]);
+}
+
+#[test]
+fn recorded_length_grows_while_the_first_take_runs() {
+    let mut stack = LoopStack::new(16);
+    stack.begin_first_layer();
+    assert_eq!(stack.recorded_len(), 0);
+
+    // The elapsed time shown while recording reads this, so it has to
+    // grow with the take rather than waiting for the loop length to be
+    // fixed at the end.
+    stack.record_first_layer(&[1, 2, 3]);
+    assert_eq!(stack.recorded_len(), 3);
+    stack.record_first_layer(&[4, 5]);
+    assert_eq!(stack.recorded_len(), 5);
+
+    stack.finish_first_layer();
+    assert_eq!(stack.recorded_len(), 5);
+}
+
+#[test]
+fn an_overdub_does_not_change_the_recorded_length() {
+    let mut stack = with_first_layer(&[1, 2]);
+    stack.begin_overdub();
+
+    let mut out = [0; 2];
+    stack.read_mixed_with_overdub(&mut out, &[3, 4], 100);
+    assert_eq!(stack.recorded_len(), 2, "the loop length is already fixed");
 }

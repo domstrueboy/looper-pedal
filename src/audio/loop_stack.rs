@@ -55,8 +55,10 @@ pub struct LoopStack {
     /// How many layers hold a finished take.
     count: usize,
     /// Loop length in samples, fixed when the first layer stops recording;
-    /// 0 while empty.
-    len: usize,
+    /// 0 while empty. Playback wraps here - it does NOT grow while the
+    /// first take is being recorded, which is what `recorded_len` is
+    /// for.
+    loop_len: usize,
     play_pos: usize,
     /// The layer being written to right now, if any. It sits just above
     /// `count` and is only counted once the take is finished.
@@ -68,7 +70,7 @@ impl LoopStack {
         Self {
             layers: (0..MAX_LAYERS).map(|_| Layer::new(capacity)).collect(),
             count: 0,
-            len: 0,
+            loop_len: 0,
             play_pos: 0,
             recording: None,
         }
@@ -78,12 +80,20 @@ impl LoopStack {
         self.layers[0].samples.len()
     }
 
-    pub fn len(&self) -> usize {
-        self.len
+    /// How much audio is recorded: the loop's fixed length, or how far
+    /// the first take has got while it's still running - the elapsed
+    /// time shown during recording comes from this.
+    pub fn recorded_len(&self) -> usize {
+        match self.recording {
+            // Only the first take grows the loop; an overdub is bounded
+            // by the length already fixed.
+            Some(index) if self.loop_len == 0 => self.layers[index].written,
+            _ => self.loop_len,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.loop_len == 0
     }
 
     pub fn play_pos(&self) -> usize {
@@ -128,9 +138,9 @@ impl LoopStack {
         let Some(index) = self.recording.take() else {
             return;
         };
-        self.len = self.layers[index].written;
+        self.loop_len = self.layers[index].written;
         self.play_pos = 0;
-        self.count = usize::from(self.len > 0);
+        self.count = usize::from(self.loop_len > 0);
     }
 
     /// Starts a layer aligned to the current playback position. False if
@@ -171,7 +181,7 @@ impl LoopStack {
     /// makes unreadable.
     pub fn clear(&mut self) {
         self.count = 0;
-        self.len = 0;
+        self.loop_len = 0;
         self.play_pos = 0;
         self.recording = None;
     }
@@ -183,13 +193,13 @@ impl LoopStack {
     /// Layers all play at the level they were recorded at - there's no
     /// per-layer gain - so this is the only volume control over them.
     pub fn read_mixed(&mut self, out: &mut [i32], gain_pct: u32) {
-        if self.len == 0 {
+        if self.loop_len == 0 {
             out.fill(0);
             return;
         }
         for sample in out.iter_mut() {
             *sample = scale_and_clamp(self.mix_at(self.play_pos), gain_pct);
-            self.play_pos = (self.play_pos + 1) % self.len;
+            self.play_pos = (self.play_pos + 1) % self.loop_len;
         }
     }
 
@@ -200,7 +210,7 @@ impl LoopStack {
     /// Recording a second pass over the same layer sums into it rather
     /// than replacing it, so nothing already played is erased.
     pub fn read_mixed_with_overdub(&mut self, out: &mut [i32], input: &[i32], gain_pct: u32) {
-        let len = self.len;
+        let len = self.loop_len;
         let Some(index) = self.recording.filter(|_| len > 0) else {
             self.read_mixed(out, gain_pct);
             return;
@@ -242,7 +252,7 @@ impl LoopStack {
         };
         self.layers[..active]
             .iter()
-            .map(|layer| i64::from(layer.sample_at(pos, self.len)))
+            .map(|layer| i64::from(layer.sample_at(pos, self.loop_len)))
             .sum()
     }
 }

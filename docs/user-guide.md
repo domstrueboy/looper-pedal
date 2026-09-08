@@ -48,9 +48,10 @@ The colored dot shows what's happening:
 
 - **Gray** - Empty, nothing recorded
 - **Blue** (pulsing) - Get ready: waiting out the record delay before
-  recording starts. A progress bar fills as the wait runs out, with the
-  seconds left written in it - recording begins when it's full. Press
-  again to call the whole thing off.
+  recording starts. The seconds left count down where the recording
+  time normally shows, with a light gray bar filling beneath it -
+  recording begins when the bar is full. The button shows **✖**: press
+  it to call the whole thing off.
 - **Red** (pulsing) - Recording, with elapsed time shown
 - **Green** - Looping, with the loop's length and a progress bar showing
   where in the loop you currently are

@@ -17,17 +17,22 @@ pub struct Readout {
 }
 
 /// Label for the main button: what a short press does next, or a trash
-/// icon while a long-press-clear is being held. Overdubbing shows a stop
-/// square rather than looping's pause, so the two playing states aren't
-/// told apart only by the indicator dot; arming shows one too, since a
-/// press there stops the recording before it starts.
+/// icon while a long-press-clear is being held. Arming gets a cancel
+/// cross of its own, because a press there throws the pending recording
+/// away rather than stopping one that's under way. Overdubbing shows a
+/// stop square rather than looping's pause, so the two playing states
+/// aren't told apart only by the indicator dot.
+///
+/// Every glyph here has to exist in egui's bundled fonts, which carry a
+/// limited subset - anything else renders as an empty box.
 pub fn press_button_label(readout: &Readout, long_press_active: bool) -> &'static str {
     if long_press_active {
         return "🗑";
     }
     match readout.state {
         LoopState::Idle => "⏺",
-        LoopState::Recording | LoopState::Overdubbing | LoopState::Arming => "⏹",
+        LoopState::Arming => "✖",
+        LoopState::Recording | LoopState::Overdubbing => "⏹",
         LoopState::Looping => "⏸",
         LoopState::Stopped => "▶",
     }
@@ -67,13 +72,17 @@ pub fn state_indicator(ui: &mut egui::Ui, readout: &Readout) {
     match readout.state {
         LoopState::Idle => {}
         LoopState::Arming => {
-            // A bar filling up reads at a glance in a way a number
-            // counting down doesn't; it fills the same way the loop's
-            // own progress bar does, and recording starts when it's
-            // full.
+            // Laid out exactly like the states below: the time as a
+            // label where the recording and loop times appear, the bar
+            // beneath it. Not the bar's own `text`, which egui draws on
+            // the left, where a shrinking number behind a growing fill
+            // reads as a contradiction.
+            ui.label(format!("{:.1}s", readout.countdown_secs));
+            // Gray rather than the playing bar's colour, so a glance
+            // can't confuse waiting with playing. Recording starts when
+            // it's full.
             ui.add(
-                egui::ProgressBar::new(readout.arming_fraction)
-                    .text(format!("{:.1}s", readout.countdown_secs)),
+                egui::ProgressBar::new(readout.arming_fraction).fill(egui::Color32::from_gray(200)),
             );
         }
         LoopState::Recording => {

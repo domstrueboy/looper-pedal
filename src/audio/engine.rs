@@ -267,7 +267,7 @@ pub fn build_looper_streams(
                 }
 
                 output_control.publish_telemetry(
-                    stack.len(),
+                    stack.recorded_len(),
                     stack.play_pos(),
                     stack.layer_count(),
                 );

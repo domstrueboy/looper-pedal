@@ -91,8 +91,12 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
                     row,
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
+                        // Both name their key, like the hint lines do.
+                        // Kept short deliberately: the buttons are a
+                        // fixed width so the row can be centered, and
+                        // "Finish overdub (O)" doesn't fit in it.
                         let overdub_label = if looper.state() == LoopState::Overdubbing {
-                            "Finish overdub"
+                            "Finish (O)"
                         } else {
                             "Overdub (O)"
                         };

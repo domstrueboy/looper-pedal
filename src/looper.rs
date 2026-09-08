@@ -7,6 +7,7 @@ use crate::state_machine::{LoopState, LoopStateMachine};
 use crate::config::{self, AppConfig};
 use crate::input::{InputEvent, InputHandler};
 use crate::loop_mirror::{self, LoopMirror};
+use crate::preroll::Preroll;
 
 /// State behind the looper screen: the state machine (owned here, on the
 /// UI thread), the relay into the audio thread, and the live streams.
@@ -19,13 +20,8 @@ pub struct LooperState {
     // even while it's still held, which broke long-press-clear from the
     // on-screen button. Set by the renderer, kept here to survive frames.
     button_held: bool,
-    /// How long to count down before the first recording starts; zero
-    /// means start immediately, which is what it was before this
-    /// existed.
-    preroll: Duration,
-    /// Set while a pre-roll is counting down, cleared the moment it
-    /// elapses or is called off.
-    armed_at: Option<Instant>,
+    /// The countdown before the first recording starts.
+    preroll: Preroll,
     /// Kept here as well as in the layer stack, which lives on the audio
     /// thread out of reach - the UI needs it to show "n/max" and to know
     /// when overdubbing is still possible.
@@ -63,8 +59,7 @@ impl LooperState {
                 settings.long_press_ms,
             ))),
             button_held: false,
-            preroll: Duration::from_millis(u64::from(settings.preroll_ms)),
-            armed_at: None,
+            preroll: Preroll::new(Duration::from_millis(u64::from(settings.preroll_ms))),
             max_layers: settings.max_layers as usize,
             mirror: LoopMirror::new(streams.captured, streams.sample_rate, restored),
             sample_rate: streams.sample_rate,
@@ -144,22 +139,12 @@ impl LooperState {
     /// Seconds left of the pre-roll countdown, or 0.0 when one isn't
     /// running.
     pub fn preroll_remaining_secs(&self) -> f32 {
-        match self.armed_at {
-            Some(armed_at) => {
-                (self.preroll.as_secs_f32() - armed_at.elapsed().as_secs_f32()).max(0.0)
-            }
-            None => 0.0,
-        }
+        self.preroll.remaining_secs(Instant::now())
     }
 
     /// How far through the pre-roll the countdown has got, 0.0-1.0.
     pub fn preroll_progress(&self) -> f32 {
-        match self.armed_at {
-            Some(armed_at) if !self.preroll.is_zero() => {
-                (armed_at.elapsed().as_secs_f32() / self.preroll.as_secs_f32()).clamp(0.0, 1.0)
-            }
-            _ => 0.0,
-        }
+        self.preroll.progress(Instant::now())
     }
 
     /// Call once per frame. Folds the spacebar and the button's latch into
@@ -173,12 +158,9 @@ impl LooperState {
         // Deliberately after the input: if a press meant to call the
         // pre-roll off lands on the same frame the countdown runs out,
         // the press should win.
-        if let Some(armed_at) = self.armed_at {
-            if now.duration_since(armed_at) >= self.preroll {
-                self.state_machine.finish_arming();
-                self.armed_at = None;
-                self.control.publish_state(self.state_machine.state());
-            }
+        if self.preroll.take_if_elapsed(now) {
+            self.state_machine.finish_arming();
+            self.control.publish_state(self.state_machine.state());
         }
 
         if self.control.take_capture_lost() > 0 {
@@ -209,12 +191,12 @@ impl LooperState {
             InputEvent::ShortPress => {
                 // A pre-roll is only for the first recording - once a
                 // loop is playing you're already in time with it.
-                if self.state() == LoopState::Idle && !self.preroll.is_zero() {
+                if self.state() == LoopState::Idle && self.preroll.is_enabled() {
                     self.state_machine.arm();
-                    self.armed_at = Some(now);
+                    self.preroll.start(now);
                 } else {
                     self.state_machine.press();
-                    self.armed_at = None;
+                    self.preroll.cancel();
                 }
                 self.control.publish_state(self.state_machine.state());
             }
@@ -225,7 +207,7 @@ impl LooperState {
 
     fn clear(&mut self) {
         self.state_machine.clear();
-        self.armed_at = None;
+        self.preroll.cancel();
         self.control.publish_state(self.state_machine.state());
         self.control.request_clear();
         self.mirror.clear();

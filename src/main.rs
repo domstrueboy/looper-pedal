@@ -9,6 +9,7 @@ mod config;
 mod input;
 mod loop_mirror;
 mod looper;
+mod preroll;
 mod settings;
 mod state_machine;
 mod ui;

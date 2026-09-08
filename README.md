@@ -68,6 +68,8 @@ src/
                               egui (state_machine_tests.rs)
   loop_mirror.rs             the UI thread's own copy of the loop, and
                               saving it (loop_mirror_tests.rs)
+  preroll.rs                 the countdown before the first recording
+                              (preroll_tests.rs)
   wav.rs                     mono 32-bit PCM, by hand (wav_tests.rs)
   audio/
     engine.rs                device enumeration, config negotiation, the

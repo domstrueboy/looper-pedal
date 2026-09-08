@@ -1,9 +1,8 @@
 # Looper Pedal
 
 A minimal single-track looper pedal replacement for practicing guitar
-through an ASIO audio interface - one loop, stacked from up to four
-overdub layers. Standalone Windows app - no DAW, no
-plugin host. See `docs/user-guide.md` for how to use it; this document
+through an ASIO audio interface - one loop, stacked from overdub
+layers. Standalone Windows app - no DAW, no plugin host. See `docs/user-guide.md` for how to use it; this document
 covers the architecture and how to build it.
 
 ## Architecture
@@ -40,6 +39,11 @@ handful of atomics - no mutex anywhere in the audio path.
   it's never shared with the input callback. The input callback only
   reads `SharedControl`'s published state to decide whether to feed
   captured samples toward the recorder.
+
+Both callback bodies are `InputPath::process` and `OutputPath::process`
+rather than closure bodies, so the whole path can be driven by a test
+without opening a device - which is how the recording alignment below is
+measured.
 
 The callback only ever sees the published state *value*, never the
 transitions, so it detects those itself by comparing against the state it
@@ -106,9 +110,10 @@ Mimics a classic single-footswitch looper pedal:
    memory)
 4. **Stopped** --press--> **Looping** (resumes the same loop)
 
-**Long-press (~2s hold)**, from any state, clears the loop and returns to
-Idle - it fires the moment the hold crosses the threshold while still
-held, not on release.
+**Long-press**, from any state, clears the loop and returns to Idle - it
+fires the moment the hold crosses the threshold while still held, not on
+release. How long that hold is is the `long_press_ms` setting, 2s by
+default, and the looper screen's hint line says the configured value.
 
 ### Pre-roll
 
@@ -130,16 +135,16 @@ the same frame.
 
 **Overdub** deliberately sits *off* that cycle, on its own control (the
 `O` key or the Overdub button), so the press cycle above keeps behaving
-exactly as it always has: **Looping** <--overdub--> **Overdubbing**. A
+as the four states above: **Looping** <--overdub--> **Overdubbing**. A
 press while overdubbing stops playback, like it does while looping - the
 main control always means "stop" when something is playing.
 
 ### Layers
 
 The first recording fixes the loop length; each overdub adds another
-layer on top, and playback is their sum. Up to `MAX_LAYERS` (4) can be
-stacked, and the newest can be dropped again ("Remove last") - dropping
-the only one is the same thing as clearing.
+layer on top, and playback is their sum. `max_layers` of them can be
+stacked, four by default, and the newest can be dropped again ("Remove
+last") - dropping the only one is the same thing as clearing.
 
 Each layer is a full-length pre-allocated buffer, but an overdub can
 start anywhere in the loop and be stopped early, so a layer only counts
@@ -161,18 +166,36 @@ recorded at, and Settings' single "Loop volume" is the only control over
 them - it scales the whole stack, still leaving the live passthrough
 alone.
 
-Four stacked takes can sum past what an `i32` sample holds, so layers are
+Stacked takes can sum past what an `i32` sample holds, so layers are
 summed in 64-bit and the loop volume is applied to that full-precision
 sum before it's clamped back down (`scale_and_clamp`). Clamping first
 would make a hot stack permanently crunchy; this way turning the loop
 volume down still recovers it.
 
+### Recording alignment
+
+The dry passthrough carries `latency_ms` of headroom between the two
+callbacks - that headroom is what absorbs their jitter - so you hear
+yourself that much after the fact. The recorded signal is held back by
+the same amount (`MonitorDelay`) before it reaches either the layer
+stack or the UI thread's copy. Without that, the sample stored at loop
+position p would be a whole monitoring delay fresher than the one heard
+at p: takes would land ahead of the beat they were played against, and
+every layer stacked on top would inherit the error again. An
+`engine_tests.rs` measurement drives both callbacks with a ramp and
+asserts the offset is zero.
+
+The rings hold `latency_frames + SCRATCH_CAPACITY` so a driver buffer
+larger than the delay still fits - the prefill, not the capacity, is
+what sets the delay.
+
 ## Settings & persistence
 
 On first run (or if the saved config no longer opens - e.g. the interface
 was unplugged), the app shows a Settings screen: pick the ASIO device,
-sample rate, input channel, loop volume and record delay. On "Start" this
-is saved and the app launches straight into the looper on subsequent
+sample rate and input channel, and set anything in the table below. On
+"Start" this is saved and the app launches straight into the looper on
+subsequent
 runs. The gear icon (top-right, in the looper screen) reopens Settings at
 any time, pre-selecting whatever's currently active.
 
@@ -232,8 +255,11 @@ Written whenever the loop changes, not on the way out, so a crash or a
 kill doesn't lose it. On launch the layers come back and the looper
 starts **Stopped** - the loop is there, silent until asked for. A saved
 loop is discarded rather than adapted if it was recorded at a different
-sample rate (there's no resampling) or no longer fits `max_loop_secs`
-and `max_layers`.
+sample rate (there's no resampling) or is longer than `max_loop_secs`
+now allows; layers past `max_layers` are dropped on their own, the ones
+underneath being independent takes. `loop_mirror::load` decides all of
+that in one place, so the layer stack and the UI thread's copy are
+always seeded from the same list.
 
 ### Why a second copy exists
 
@@ -242,7 +268,9 @@ and read it - so the UI thread keeps its own copy (`loop_mirror.rs`) to
 have something it can write. The input callback pushes captured samples
 into a second ring buffer alongside the recorder's, and the UI thread
 drains it each frame. Same lock-free audio -> UI direction as the
-telemetry; no lock anywhere near the callback.
+telemetry; no lock anywhere near the callback. Both rings are fed from
+the same delayed signal (see below), so the two layouts describe the
+same audio.
 
 Takes are stored as they were played - where each began, and the samples
 - and only laid out into full-length layers when saving, so the copy
@@ -276,7 +304,7 @@ consequences worth knowing:
 ```powershell
 cargo build       # compile
 cargo run         # build + launch
-cargo test        # run the unit tests (state machine, layer stack, input handler)
+cargo test        # run the unit tests - no device needed, including the audio path
 ```
 
 The app icon is drawn in code (`ui/icon.rs`) rather than stored as an

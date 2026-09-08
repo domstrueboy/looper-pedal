@@ -56,7 +56,7 @@ round button. They're fully interchangeable.
 | 2nd press | Stop recording, loop starts playing immediately |
 | 3rd press | Stop the loop (silence, but it's still remembered) |
 | 4th press | Resume playing the same loop |
-| **Hold for ~2 seconds** | Clear the loop, from any state - back to empty |
+| **Hold it down** | Clear the loop, from any state - back to empty. Two seconds by default; the hint line under the buttons says how long yours is set to |
 
 Your live guitar signal is always audible, whether or not a loop is
 playing - the loop just plays back on top of it.
@@ -80,9 +80,9 @@ The colored dot shows what's happening:
 
 Once a loop is playing, press **O** (or the **Overdub** button) to start
 layering on top of it. Whatever you play is added to the loop; press
-**O** again to finish that layer. You can stack up to **4 layers**
-including the first recording, and the counter under the buttons shows
-where you are.
+**O** again to finish that layer. **Max layers** in Settings sets how
+many you can stack including the first recording - four by default - and
+the counter under the buttons shows where you are.
 
 A few things worth knowing:
 
@@ -118,14 +118,20 @@ them in any audio editor, or delete them to start clean.
 
 Two things will make a saved loop *not* come back: changing the **sample
 rate**, since the recording no longer matches the device, and lowering
-**Max loop length** or **Max layers** below what the loop needs. In both
-cases it's dropped rather than mangled.
+**Max loop length** below the loop's own length. Either way it's dropped
+rather than mangled. Lowering **Max layers** is gentler - the layers that
+still fit come back and the ones on top are dropped, since each layer is
+a take in its own right.
 
 ## Changing settings later
 
 Click the small **⚙** icon (top-right of the looper screen) at any time
-to reopen Settings and change device, sample rate, or input channel. It
-remembers your current choice, so you're not starting from scratch.
+to reopen Settings and change anything there. It remembers your current
+choices, so you're not starting from scratch.
+
+Your loop is kept while you're in there and comes back when you press
+**Start** - it's read from the saved WAV files, the same way it is when
+you reopen the app.
 
 ## Not yet supported
 

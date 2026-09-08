@@ -60,6 +60,8 @@ src/
                               lists and what's selected
   config.rs                  persisted device/rate/input-channel choice
                               (looper-pedal.cfg next to the exe)
+  build.rs                   generates the .ico from `ui/icon.rs` and
+                              embeds it as the exe's icon resource
   input.rs                   short-press vs long-press-clear detection
                               (input_tests.rs)
   audio/
@@ -75,6 +77,8 @@ src/
     looper.rs                 the looper screen
     settings.rs               the settings screen
     indicator.rs              state circle + label + progress bar widget
+    icon.rs                   the app icon, drawn as RGBA at any size
+                              (icon_tests.rs)
 ```
 
 `app.rs`, `looper.rs` and `settings.rs` hold no `egui::` types at all, so
@@ -169,6 +173,14 @@ cargo build       # compile
 cargo run         # build + launch
 cargo test        # run the unit tests (state machine, layer stack, input handler)
 ```
+
+The app icon is drawn in code (`ui/icon.rs`) rather than stored as an
+image: a green loop arrow around a red record dot. That means no
+image-decoding dependency and no binary asset in the repo, and it
+renders at any size - the window asks for one, and `build.rs` `include!`s
+the same file to generate a multi-size `.ico` for the executable's icon
+resource. Embedding needs `rc.exe` from the Windows SDK; if it's missing
+the build warns and carries on without the exe icon.
 
 Debug builds are console-subsystem binaries, so `cargo run` keeps a
 terminal alongside the window - that's where the stream config, underrun

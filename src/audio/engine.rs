@@ -144,6 +144,47 @@ pub struct LooperStreams {
     pub captured: HeapCons<i32>,
 }
 
+/// Holds the recorded signal back to where the monitored one is.
+///
+/// The dry path carries `latency_frames` of headroom between the two
+/// callbacks - that headroom is what absorbs their jitter - so a player
+/// hears themselves that far after the fact. The recorder has no such
+/// backlog, so without this the sample stored at loop position p is a
+/// whole monitoring delay fresher than the one heard at p: a take lands
+/// ahead of the beat it was played against, and every layer stacked on
+/// top inherits the error again.
+///
+/// It runs whether or not anything is being recorded, because a take has
+/// to open with what was being heard when the loop reached its start
+/// point - which is audio from before the take opened.
+struct MonitorDelay {
+    /// The last `frames` samples, oldest at `at`. Empty means no delay.
+    buffer: Vec<i32>,
+    at: usize,
+}
+
+impl MonitorDelay {
+    fn new(frames: usize) -> Self {
+        Self {
+            buffer: vec![0; frames],
+            at: 0,
+        }
+    }
+
+    /// Replaces every sample with the one `frames` earlier, in place.
+    fn apply(&mut self, samples: &mut [i32]) {
+        if self.buffer.is_empty() {
+            return;
+        }
+        for sample in samples.iter_mut() {
+            // The slot holds the oldest sample; swapping retires it and
+            // files the new one in its place in a single step.
+            std::mem::swap(sample, &mut self.buffer[self.at]);
+            self.at = (self.at + 1) % self.buffer.len();
+        }
+    }
+}
+
 /// The input half of the audio path: one interleaved buffer from the
 /// driver, reduced to the chosen channel as mono and handed to everyone
 /// who wants it.
@@ -156,6 +197,7 @@ struct InputPath {
     channels: u16,
     input_channel: u16,
     scratch: Vec<i32>,
+    delay: MonitorDelay,
     passthrough: HeapProd<i32>,
     recorder: HeapProd<i32>,
     capture: HeapProd<i32>,
@@ -178,14 +220,22 @@ impl InputPath {
             if self.passthrough.push_slice(mono) < mono.len() {
                 self.control.note_output_underrun();
             }
+
+            // Held back to match what the passthrough is putting out
+            // right now - see `MonitorDelay`. Both the layer stack and
+            // the UI thread's copy are fed from here, so they still see
+            // the same samples as each other.
+            let delayed = &mut self.scratch[..frames];
+            self.delay.apply(delayed);
+
             if matches!(
                 self.control.load_state(),
                 LoopState::Recording | LoopState::Overdubbing
             ) {
-                self.recorder.push_slice(mono);
-                let mirrored = self.capture.push_slice(mono);
-                if mirrored < mono.len() {
-                    self.control.note_capture_lost(mono.len() - mirrored);
+                self.recorder.push_slice(delayed);
+                let mirrored = self.capture.push_slice(delayed);
+                if mirrored < delayed.len() {
+                    self.control.note_capture_lost(delayed.len() - mirrored);
                 }
             }
         }
@@ -294,8 +344,10 @@ fn build_audio_path(
     channels: u16,
     restored: &[Vec<i32>],
 ) -> (AudioPath, HeapCons<i32>) {
-    // Just enough headroom between the callbacks to absorb timing jitter,
-    // not a deliberate monitoring delay. Everything below is mono.
+    // Headroom between the callbacks, to absorb their jitter. It delays
+    // the monitored signal by that much as a side effect, which is why
+    // the recorded signal is held back to match - see `MonitorDelay`.
+    // Everything below is mono.
     let latency_frames = (settings.latency_ms as usize * sample_rate as usize) / 1_000;
 
     // Dry passthrough bridge.
@@ -329,6 +381,7 @@ fn build_audio_path(
             channels,
             input_channel: settings.input_channel,
             scratch: vec![0i32; SCRATCH_CAPACITY],
+            delay: MonitorDelay::new(latency_frames),
             passthrough: passthrough_tx,
             recorder: recorder_tx,
             capture: capture_tx,

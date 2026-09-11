@@ -3,12 +3,17 @@ use looper_core::config::{
     LATENCY_MS_RANGE, LONG_PRESS_MS_RANGE, MAX_LAYERS_RANGE, MAX_LOOP_SECS_RANGE, PREROLL_MS_RANGE,
     VOLUME_PCT_RANGE,
 };
-use crate::settings::SettingsState;
+use looper_core::settings::SettingsState;
+use looper_hal::Backends;
 
 /// Reserved below the scrolling list so Start is always reachable.
 const START_ROW_HEIGHT: f32 = 40.0;
 
-pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Action> {
+pub fn render(
+    ui: &mut egui::Ui,
+    settings: &mut SettingsState,
+    backends: &Backends,
+) -> Option<Action> {
     let mut action = None;
 
     egui::Frame::default()
@@ -30,7 +35,7 @@ pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Action>
             let can_start = egui::ScrollArea::vertical()
                 .max_height((ui.available_height() - START_ROW_HEIGHT).max(120.0))
                 .show(ui, |ui| {
-                    ui.vertical_centered(|ui| controls(ui, settings)).inner
+                    ui.vertical_centered(|ui| controls(ui, settings, backends)).inner
                 })
                 .inner;
 
@@ -55,7 +60,7 @@ pub fn render(ui: &mut egui::Ui, settings: &mut SettingsState) -> Option<Action>
 /// The pickers and sliders. Returns whether there's a startable choice:
 /// a device that reports no usable rate or no inputs can't be opened, and
 /// says so instead of offering Start.
-fn controls(ui: &mut egui::Ui, settings: &mut SettingsState) -> bool {
+fn controls(ui: &mut egui::Ui, settings: &mut SettingsState, backends: &Backends) -> bool {
     if settings.devices.is_empty() {
         ui.colored_label(egui::Color32::RED, "No ASIO devices found.");
         return false;
@@ -70,7 +75,7 @@ fn controls(ui: &mut egui::Ui, settings: &mut SettingsState) -> bool {
             }
         });
     if settings.config.device_name != previous_device {
-        settings.refresh_for_selected_device();
+        settings.refresh_for_selected_device(backends);
     }
 
     if settings.sample_rates.is_empty() {

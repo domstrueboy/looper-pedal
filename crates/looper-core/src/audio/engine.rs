@@ -4,6 +4,10 @@
 
 use std::sync::Arc;
 
+use looper_hal::{
+    AudioStream, Backends, DeviceId, ErrorSink, InputProcessor, MAX_BLOCK_FRAMES, OutputProcessor,
+    StreamRequest,
+};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Producer, Split},
@@ -15,9 +19,13 @@ use crate::config::AppConfig;
 use crate::state_machine::LoopState;
 
 /// Bounds one callback's worth of work at a fixed size, so the scratch
-/// buffers can be taken up front. Not a setting - it's about what the
-/// driver might hand us, not about how anyone wants the app to behave.
-pub const SCRATCH_CAPACITY: usize = 32768;
+/// buffers can be taken up front.
+///
+/// The same bound the backend promises, rather than a second opinion
+/// about it. Kept as a loop of our own as well, because the tests drive
+/// these paths directly - without a backend in front of them, nothing
+/// else holds the buffers to a size the scratch can take.
+const SCRATCH_CAPACITY: usize = MAX_BLOCK_FRAMES;
 
 /// Seconds of captured audio the UI thread's copy can fall behind by
 /// before samples start being dropped. Generous: losing any means the
@@ -221,7 +229,8 @@ pub fn build_audio_path(
     control: &Arc<SharedControl>,
     settings: &AppConfig,
     sample_rate: u32,
-    channels: u16,
+    input_channels: u16,
+    output_channels: u16,
     restored: &[Vec<f32>],
 ) -> (AudioPath, HeapCons<f32>) {
     // Headroom between the callbacks, to absorb their jitter. It delays
@@ -268,7 +277,7 @@ pub fn build_audio_path(
     let path = AudioPath {
         input: InputPath {
             control: Arc::clone(control),
-            channels,
+            channels: input_channels,
             input_channel: settings.input_channel,
             scratch: vec![0.0f32; SCRATCH_CAPACITY],
             delay: MonitorDelay::new(latency_frames),
@@ -278,7 +287,7 @@ pub fn build_audio_path(
         },
         output: OutputPath {
             control: Arc::clone(control),
-            channels,
+            channels: output_channels,
             dry: vec![0.0f32; SCRATCH_CAPACITY],
             loop_out: vec![0.0f32; SCRATCH_CAPACITY],
             recorded: vec![0.0f32; SCRATCH_CAPACITY],
@@ -289,6 +298,104 @@ pub fn build_audio_path(
         },
     };
     (path, capture_rx)
+}
+
+/// The two halves as the backend sees them.
+///
+/// These impls live here rather than in the app because neither the
+/// trait nor the type is the app's: the orphan rule decides where they
+/// go, and it is right to - the paths and the promise they keep (no
+/// allocation, no locks, bounded work) belong together.
+impl InputProcessor for InputPath {
+    fn process(&mut self, input: &[f32]) {
+        InputPath::process(self, input);
+    }
+}
+
+impl OutputProcessor for OutputPath {
+    fn process(&mut self, output: &mut [f32]) {
+        OutputPath::process(self, output);
+    }
+}
+
+/// A running looper: the streams, and the channel the UI thread reads
+/// captured samples from - it keeps its own copy of the loop, since the
+/// layer stack itself is out of reach inside the output callback.
+pub struct LooperStreams {
+    /// Dropping this stops the audio.
+    pub stream: Box<dyn AudioStream>,
+    pub sample_rate: u32,
+    pub captured: HeapCons<f32>,
+}
+
+/// The device named in `settings`, if any backend has one by that name.
+///
+/// Matching by name alone is what the config file can express today; the
+/// backend it came from is whichever one claims it. Once a config stores
+/// the backend too, this becomes a lookup rather than a search.
+pub fn find_device(backends: &Backends, name: &str) -> Result<DeviceId, String> {
+    backends
+        .devices()
+        .into_iter()
+        .find(|device| device.id.name == name && device.direction.can_capture())
+        .map(|device| device.id)
+        .ok_or_else(|| format!("audio device '{name}' not found"))
+}
+
+/// Opens the device named in `settings` and starts the looper on it.
+///
+/// Only the chosen input channel is captured, treated as mono and
+/// duplicated across every output channel; live input always passes
+/// through, recording/looping follows `control`. `LoopStack` lives only
+/// inside the output path, so nothing here needs a lock. `restored`
+/// seeds the layer stack with a loop saved earlier, already held to
+/// these settings by `loop_mirror::load`.
+pub fn build_looper_streams(
+    backends: &Backends,
+    control: Arc<SharedControl>,
+    settings: &AppConfig,
+    restored: &[Vec<f32>],
+    on_error: ErrorSink,
+) -> Result<LooperStreams, String> {
+    let device = find_device(backends, &settings.device_name)?;
+    let request = StreamRequest {
+        input: device.clone(),
+        output: device,
+        sample_rate: settings.sample_rate,
+    };
+    let open = backends.open(&request).map_err(|e| e.to_string())?;
+
+    // Read what was granted rather than what was asked for: everything
+    // below is sized in samples, and a device that handed back another
+    // rate would leave every one of those sizes wrong.
+    let format = open.format();
+    if settings.input_channel >= format.input_channels {
+        return Err(format!(
+            "input channel {} is out of range (device has {} channel(s))",
+            settings.input_channel + 1,
+            format.input_channels
+        ));
+    }
+
+    let (path, captured) = build_audio_path(
+        &control,
+        settings,
+        format.sample_rate,
+        format.input_channels,
+        format.output_channels,
+        restored,
+    );
+    let AudioPath { input, output } = path;
+
+    let stream = open
+        .start(Box::new(input), Box::new(output), on_error)
+        .map_err(|e| e.to_string())?;
+
+    Ok(LooperStreams {
+        stream,
+        sample_rate: format.sample_rate,
+        captured,
+    })
 }
 
 /// Layer bookkeeping that has to happen exactly when the state changes

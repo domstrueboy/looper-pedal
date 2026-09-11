@@ -19,3 +19,7 @@ cpal = { version = "0.18.2", optional = true }
 [[example]]
 name = "list_devices"
 required-features = ["cpal"]
+
+[[example]]
+name = "open_device"
+required-features = ["cpal"]

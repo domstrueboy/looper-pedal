@@ -8,6 +8,7 @@ edition.workspace = true
 # platform without an audio SDK to build against.
 [dependencies]
 directories = "6.0.0"
+looper-hal = { path = "../looper-hal" }
 ringbuf = "0.5.1"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.5"

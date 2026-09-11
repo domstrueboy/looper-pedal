@@ -1891,11 +1891,10 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 name = "looper-app"
 version = "0.1.5"
 dependencies = [
- "cpal",
  "eframe",
  "egui",
  "looper-core",
- "ringbuf",
+ "looper-hal",
  "winresource",
 ]
 
@@ -1904,6 +1903,7 @@ name = "looper-core"
 version = "0.1.5"
 dependencies = [
  "directories",
+ "looper-hal",
  "ringbuf",
  "serde",
  "toml",

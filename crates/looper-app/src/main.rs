@@ -4,14 +4,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-mod cpal_engine;
-mod looper;
-mod settings;
 mod ui;
 
 use std::time::Instant;
 
 use app::{App, Screen};
+use looper_hal::{Backends, cpal_backend::default_backends};
 
 /// Advances the looper, hands the frame to a screen renderer, and applies
 /// the action it returns. This and `ui/` are the only framework-aware code
@@ -19,7 +17,7 @@ use app::{App, Screen};
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let action = match &mut self.screen {
-            Screen::Settings(settings) => ui::settings::render(ui, settings),
+            Screen::Settings(settings) => ui::settings::render(ui, settings, &self.backends),
             Screen::Looper(looper) => {
                 // Long-press detection and the pre-roll countdown need
                 // continuous frames, not just input-triggered repaints.
@@ -60,6 +58,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Looper Pedal",
         options,
-        Box::new(|_cc| Ok(Box::new(App::new()))),
+        Box::new(|_cc| Ok(Box::new(App::new(Backends::new(default_backends()))))),
     )
 }

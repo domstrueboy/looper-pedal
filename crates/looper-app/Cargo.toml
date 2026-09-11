@@ -16,10 +16,8 @@ winresource = "0.1"
 
 [dependencies]
 looper-core = { path = "../looper-core" }
+# The backends themselves. ASIO is the only one built today; asking for
+# it here is what pulls `cpal` into the build at all.
+looper-hal = { path = "../looper-hal", features = ["asio"] }
 eframe = { version = "0.36.1", features = ["glow"] }
 egui = "0.36.1"
-
-# Both only for `cpal_engine.rs`, which is on its way into a backend
-# behind `looper-hal`. They leave this crate with it.
-cpal = { version = "0.18.2", features = ["asio"] }
-ringbuf = "0.5.1"

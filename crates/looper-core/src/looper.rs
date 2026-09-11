@@ -1,13 +1,15 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::cpal_engine as engine;
-use looper_core::audio::shared_control::SharedControl;
-use looper_core::state_machine::{LoopState, LoopStateMachine};
-use looper_core::config::{self, AppConfig};
-use looper_core::input::{InputEvent, InputHandler};
-use looper_core::loop_mirror::{self, LoopMirror};
-use looper_core::preroll::Preroll;
+use looper_hal::{AudioStream, Backends, HalError};
+
+use crate::audio::engine;
+use crate::audio::shared_control::SharedControl;
+use crate::state_machine::{LoopState, LoopStateMachine};
+use crate::config::{self, AppConfig};
+use crate::input::{InputEvent, InputHandler};
+use crate::loop_mirror::{self, LoopMirror};
+use crate::preroll::Preroll;
 
 /// State behind the looper screen: the state machine (owned here, on the
 /// UI thread), the relay into the audio thread, and the live streams.
@@ -30,19 +32,25 @@ pub struct LooperState {
     /// be written to disk - see `LoopMirror`.
     mirror: LoopMirror,
     sample_rate: u32,
-    _input_stream: cpal::Stream,
-    _output_stream: cpal::Stream,
+    /// Holding it is what keeps the audio running; dropping it stops.
+    _stream: Box<dyn AudioStream>,
 }
 
 impl LooperState {
     /// Opens the device and starts the streams, or returns why it couldn't:
     /// device/rate mismatches are user-recoverable, not bugs.
-    pub fn start(settings: &AppConfig) -> Result<Self, String> {
+    pub fn start(backends: &Backends, settings: &AppConfig) -> Result<Self, String> {
         let control = Arc::new(SharedControl::new(settings.volume_pct));
         // Whatever was left from last time, if it still fits what's
         // configured now.
         let restored = loop_mirror::load(&config::loop_dir(), settings);
-        let streams = engine::build_looper_streams(Arc::clone(&control), settings, &restored)?;
+        let streams = engine::build_looper_streams(
+            backends,
+            Arc::clone(&control),
+            settings,
+            &restored,
+            report_stream_error(),
+        )?;
 
         // A restored loop is there, but silent until it's asked for.
         let state_machine = if restored.is_empty() {
@@ -63,8 +71,7 @@ impl LooperState {
             max_layers: settings.max_layers as usize,
             mirror: LoopMirror::new(streams.captured, streams.sample_rate, restored),
             sample_rate: streams.sample_rate,
-            _input_stream: streams.input,
-            _output_stream: streams.output,
+            _stream: streams.stream,
         })
     }
 
@@ -232,4 +239,13 @@ impl LooperState {
             );
         }
     }
+}
+
+/// Where a running stream reports trouble.
+///
+/// Still only stderr, which a release build has no console for - the
+/// in-app surface is its own task. What has changed is that there is now
+/// one place to put it, rather than a callback buried in the backend.
+fn report_stream_error() -> looper_hal::ErrorSink {
+    Arc::new(|error: HalError| eprintln!("{error}"))
 }

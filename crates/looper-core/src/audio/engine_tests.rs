@@ -92,7 +92,7 @@ fn overdub_offset(latency_ms: u32) -> f32 {
         ..test_settings()
     };
     let control = Arc::new(SharedControl::new(settings.volume_pct));
-    let (mut path, _captured) = build_audio_path(&control, &settings, TEST_RATE, 1, &[]);
+    let (mut path, _captured) = build_audio_path(&control, &settings, TEST_RATE, 1, 1, &[]);
 
     // Silence until the loop exists, so the layer underneath the overdub
     // contributes nothing to what comes back out.
@@ -192,7 +192,7 @@ fn no_delay_leaves_the_signal_alone() {
 fn the_recorder_and_the_mirror_are_fed_the_same_samples() {
     let settings = test_settings();
     let control = Arc::new(SharedControl::new(settings.volume_pct));
-    let (mut path, mut captured) = build_audio_path(&control, &settings, TEST_RATE, 1, &[]);
+    let (mut path, mut captured) = build_audio_path(&control, &settings, TEST_RATE, 1, 1, &[]);
 
     control.publish_state(LoopState::Recording);
     let mut next = 1.0;
@@ -220,7 +220,7 @@ fn a_callback_larger_than_the_monitoring_delay_is_not_dropped() {
     let settings = test_settings();
     let latency_frames = (settings.latency_ms as usize * TEST_RATE as usize) / 1_000;
     let control = Arc::new(SharedControl::new(settings.volume_pct));
-    let (mut path, _captured) = build_audio_path(&control, &settings, TEST_RATE, 1, &[]);
+    let (mut path, _captured) = build_audio_path(&control, &settings, TEST_RATE, 1, 1, &[]);
 
     let frames = latency_frames * 4;
     let input: Vec<f32> = (1..=frames).map(|i| i as f32).collect();
@@ -235,4 +235,29 @@ fn a_callback_larger_than_the_monitoring_delay_is_not_dropped() {
     let mut expected = vec![0.0f32; latency_frames];
     expected.extend_from_slice(&input[..frames - latency_frames]);
     assert_eq!(out, expected, "delayed by the monitoring delay, otherwise whole");
+}
+
+/// The two ends need not carry the same number of channels - a capture
+/// endpoint is often mono where the render one is stereo. Feeding both
+/// paths one count would de-interleave at the wrong stride, which fails
+/// silently: no error, just the wrong samples in the wrong slots.
+#[test]
+fn the_input_and_output_channel_counts_are_independent() {
+    let settings = test_settings();
+    let latency_frames = (settings.latency_ms as usize * TEST_RATE as usize) / 1_000;
+    let control = Arc::new(SharedControl::new(settings.volume_pct));
+    let (mut path, _captured) = build_audio_path(&control, &settings, TEST_RATE, 1, 2, &[]);
+
+    // One mono channel in, two out, and long enough to push the
+    // monitoring delay through so the output carries real samples.
+    let frames = latency_frames + BLOCK;
+    let input: Vec<f32> = (1..=frames).map(|i| i as f32).collect();
+    path.input.process(&input);
+
+    let mut out = vec![0.0f32; frames * 2];
+    path.output.process(&mut out);
+
+    let first = latency_frames * 2;
+    assert_eq!(out[first], input[0], "delayed by the monitoring delay");
+    assert_eq!(out[first], out[first + 1], "and centred across both channels");
 }

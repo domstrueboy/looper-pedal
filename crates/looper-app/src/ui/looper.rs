@@ -1,6 +1,6 @@
 use crate::app::Action;
 use looper_core::state_machine::LoopState;
-use crate::looper::LooperState;
+use looper_core::looper::LooperState;
 use crate::ui::indicator;
 
 /// Both secondary buttons share a size, so the row can be measured and

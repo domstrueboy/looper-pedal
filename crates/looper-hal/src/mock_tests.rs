@@ -49,7 +49,10 @@ fn it_reports_one_duplex_device() {
 #[test]
 fn a_device_it_has_never_heard_of_is_not_found() {
     let (backend, _driver) = mock();
-    let missing = DeviceId::new(BackendId::MOCK, "Not A Device");
+    let missing = DeviceInfo {
+        id: DeviceId::new(BackendId::MOCK, "Not A Device"),
+        direction: Direction::Duplex,
+    };
 
     assert!(matches!(
         backend.caps(&missing),
@@ -60,7 +63,8 @@ fn a_device_it_has_never_heard_of_is_not_found() {
 #[test]
 fn caps_report_the_channels_it_was_built_with() {
     let (backend, _driver) = mock_with(2, 4);
-    let caps = backend.caps(&DeviceId::new(BackendId::MOCK, DEVICE)).expect("caps");
+    let device = backend.devices().expect("enumerates").remove(0);
+    let caps = backend.caps(&device).expect("caps");
 
     assert_eq!(caps.input_channels, 2);
     assert_eq!(caps.output_channels, 4);

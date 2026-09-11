@@ -93,11 +93,11 @@ impl AudioBackend for MockBackend {
         }])
     }
 
-    fn caps(&self, device: &DeviceId) -> HalResult<DeviceCaps> {
-        if device.name != DEVICE {
+    fn caps(&self, device: &DeviceInfo) -> HalResult<DeviceCaps> {
+        if device.id.name != DEVICE {
             return Err(HalError::DeviceNotFound {
                 backend: BackendId::MOCK,
-                device: device.name.clone(),
+                device: device.id.name.clone(),
             });
         }
         Ok(DeviceCaps {

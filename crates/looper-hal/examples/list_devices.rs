@@ -32,7 +32,7 @@ fn main() {
         }
         for device in devices {
             print!("  {:?}  {}", device.direction, device.id.name);
-            match backend.caps(&device.id) {
+            match backend.caps(&device) {
                 Ok(caps) => println!(
                     "\n      in {} ch, out {} ch, rates {:?}",
                     caps.input_channels, caps.output_channels, caps.sample_rates

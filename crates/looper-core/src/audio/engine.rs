@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use looper_hal::{
-    AudioStream, Backends, DeviceId, ErrorSink, InputProcessor, MAX_BLOCK_FRAMES, OutputProcessor,
-    StreamRequest,
+    AudioStream, Backends, DeviceInfo, ErrorSink, InputProcessor, MAX_BLOCK_FRAMES,
+    OutputProcessor, StreamRequest,
 };
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
@@ -333,12 +333,11 @@ pub struct LooperStreams {
 /// Matching by name alone is what the config file can express today; the
 /// backend it came from is whichever one claims it. Once a config stores
 /// the backend too, this becomes a lookup rather than a search.
-pub fn find_device(backends: &Backends, name: &str) -> Result<DeviceId, String> {
+pub fn find_device(backends: &Backends, name: &str) -> Result<DeviceInfo, String> {
     backends
         .devices()
         .into_iter()
         .find(|device| device.id.name == name && device.direction.can_capture())
-        .map(|device| device.id)
         .ok_or_else(|| format!("audio device '{name}' not found"))
 }
 
@@ -357,7 +356,7 @@ pub fn build_looper_streams(
     restored: &[Vec<f32>],
     on_error: ErrorSink,
 ) -> Result<LooperStreams, String> {
-    let device = find_device(backends, &settings.device_name)?;
+    let device = find_device(backends, &settings.device_name)?.id;
     let request = StreamRequest {
         input: device.clone(),
         output: device,

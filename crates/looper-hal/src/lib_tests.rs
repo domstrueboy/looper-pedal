@@ -46,7 +46,7 @@ impl AudioBackend for Absent {
             detail: "no driver installed".to_string(),
         })
     }
-    fn caps(&self, _device: &DeviceId) -> HalResult<DeviceCaps> {
+    fn caps(&self, _device: &DeviceInfo) -> HalResult<DeviceCaps> {
         unreachable!("nothing to ask about")
     }
     fn open(&self, _request: &StreamRequest) -> HalResult<Box<dyn OpenDevice>> {

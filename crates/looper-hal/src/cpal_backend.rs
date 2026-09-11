@@ -47,6 +47,11 @@ impl CpalBackend {
         Self::new(BackendId::ASIO, cpal::HostId::Asio, "ASIO")
     }
 
+    #[cfg(windows)]
+    pub fn wasapi() -> Self {
+        Self::new(BackendId::WASAPI, cpal::HostId::Wasapi, "WASAPI")
+    }
+
     /// Resolved per call rather than held: a driver can be installed,
     /// removed or claimed by something else between one call and the
     /// next, and a stale handle would hide that.
@@ -197,19 +202,10 @@ impl AudioBackend for CpalBackend {
             .collect())
     }
 
-    fn caps(&self, id: &DeviceId) -> HalResult<DeviceCaps> {
-        let device = self
-            .enumerate()?
-            .into_iter()
-            .find(|device| device.to_string() == id.name)
-            .ok_or_else(|| HalError::DeviceNotFound {
-                backend: self.id,
-                device: id.name.clone(),
-            })?;
-        let direction = direction_of(&device).ok_or_else(|| HalError::DeviceNotFound {
-            backend: self.id,
-            device: id.name.clone(),
-        })?;
+    fn caps(&self, info: &DeviceInfo) -> HalResult<DeviceCaps> {
+        // Looked up with the direction, not by name: see the trait.
+        let device = self.find(&info.id, info.direction)?;
+        let direction = info.direction;
 
         Ok(DeviceCaps {
             sample_rates: rates(&device, direction),
@@ -227,19 +223,16 @@ impl AudioBackend for CpalBackend {
     }
 
     fn open(&self, request: &StreamRequest) -> HalResult<Box<dyn OpenDevice>> {
-        // One handle when both ends name the same device. ASIO requires
-        // it: its duplex streams have to be built from a single handle or
-        // they silently drop audio.
-        let duplex = request.input == request.output;
-        let input_device = self.find(
-            &request.input,
-            if duplex {
-                Direction::Duplex
-            } else {
-                Direction::Input
-            },
-        )?;
-        let output_device = if duplex {
+        // `Direction::Input` here means "can capture", so a duplex
+        // device qualifies as well as a capture-only endpoint.
+        let input_device = self.find(&request.input, Direction::Input)?;
+
+        // ASIO's duplex streams must be built from ONE handle, or they
+        // silently drop audio. But naming the same device twice does not
+        // by itself mean duplex: WASAPI presents an interface's capture
+        // and render halves as separate devices under the *same name*,
+        // so what settles it is whether the device we found does both.
+        let output_device = if request.input == request.output && input_device.supports_output() {
             None
         } else {
             Some(self.find(&request.output, Direction::Output)?)
@@ -419,15 +412,24 @@ impl AudioStream for CpalStream {
 }
 
 /// Every backend this build offers on this machine, best first.
+// Built by pushing rather than as a list literal: which backends exist
+// is decided by `cfg`, and attributes on list elements are not stable.
+#[allow(clippy::vec_init_then_push)]
 pub fn default_backends() -> Vec<Box<dyn AudioBackend>> {
+    #[allow(unused_mut)]
+    let mut backends: Vec<Box<dyn AudioBackend>> = Vec::new();
+
     // ASIO first where it exists: it is the only one of these that gives
     // a guitarist a latency they can play through.
     #[cfg(all(windows, feature = "asio"))]
-    {
-        vec![Box::new(CpalBackend::asio())]
-    }
-    #[cfg(not(all(windows, feature = "asio")))]
-    {
-        Vec::new()
-    }
+    backends.push(Box::new(CpalBackend::asio()));
+
+    // Always there on Windows and needing no driver of its own, but
+    // shared mode only - an order more latency, and the two halves of an
+    // interface arrive as separate endpoints. Running at all on a
+    // machine with no ASIO driver is the point of it.
+    #[cfg(windows)]
+    backends.push(Box::new(CpalBackend::wasapi()));
+
+    backends
 }

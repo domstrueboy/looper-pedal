@@ -62,7 +62,7 @@ impl SettingsState {
     pub fn refresh_for_selected_device(&mut self, backends: &Backends) {
         let caps = engine::find_device(backends, &self.config.device_name)
             .ok()
-            .and_then(|device| backends.get(device.backend)?.caps(&device).ok());
+            .and_then(|device| backends.get(device.id.backend)?.caps(&device).ok());
 
         (self.sample_rates, self.input_channels) = match caps {
             // Falls back to empty rather than surfacing the error: a

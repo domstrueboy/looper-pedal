@@ -211,7 +211,11 @@ pub trait AudioBackend {
 
     fn devices(&self) -> HalResult<Vec<DeviceInfo>>;
 
-    fn caps(&self, device: &DeviceId) -> HalResult<DeviceCaps>;
+    /// Takes the whole `DeviceInfo` rather than its id: a name alone
+    /// does not identify an endpoint. WASAPI presents an interface's
+    /// capture and render halves under the *same* name, so asking by
+    /// name answers about whichever came first in the list.
+    fn caps(&self, device: &DeviceInfo) -> HalResult<DeviceCaps>;
 
     /// Negotiate, and stop there. Nothing is running yet and no callback
     /// has been handed over.

@@ -1,0 +1,24 @@
+[package]
+name = "looper-app"
+version.workspace = true
+edition.workspace = true
+
+# The executable keeps its own name: it's what the release zip carries
+# and what anyone who already has the app will look for.
+[[bin]]
+name = "looper_pedal"
+path = "src/main.rs"
+
+# Build-only, and the sole way to put an icon into a Windows executable:
+# it drives the SDK's resource compiler. Nothing of it ships in the binary.
+[build-dependencies]
+winresource = "0.1"
+
+[dependencies]
+cpal = { version = "0.18.2", features = ["asio"] }
+directories = "6.0.0"
+eframe = { version = "0.36.1", features = ["glow"] }
+egui = "0.36.1"
+ringbuf = "0.5.1"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.5"

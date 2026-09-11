@@ -52,12 +52,14 @@ jobs:
 
           sed -i "s/^version = \"$current\"/version = \"$new\"/" Cargo.toml
 
-          # Cargo.lock mirrors the root package's own version too; `cargo
+          # Cargo.lock mirrors each workspace member's version too; `cargo
           # build --locked` below fails if it's stale, so keep it in sync
           # by hand rather than needing a full cargo invocation just for
           # this (which would need the ASIO SDK set up before this step).
+          # The version itself lives in the root `[workspace.package]`,
+          # which is what the grep and sed above edit.
           awk -v old="$current" -v new="$new" '
-            /^name = "looper_pedal"$/ { found=1 }
+            /^name = "looper-app"$/ { found=1 }
             found && /^version = / { sub(old, new); found=0 }
             { print }
           ' Cargo.lock > Cargo.lock.tmp && mv Cargo.lock.tmp Cargo.lock

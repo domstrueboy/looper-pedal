@@ -1,18 +1,14 @@
-[package]
-name = "looper_pedal"
+# The workspace root. It carries no code of its own - the app is
+# `crates/looper-app` - and exists so the audio, core and UI halves can
+# become crates of their own without moving anything again.
+#
+# The version lives here rather than in each crate: they're released
+# together as one app, and the release workflow bumps this one line.
+
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.5"
 edition = "2024"
-
-# Build-only, and the sole way to put an icon into a Windows executable:
-# it drives the SDK's resource compiler. Nothing of it ships in the binary.
-[build-dependencies]
-winresource = "0.1"
-
-[dependencies]
-cpal = { version = "0.18.2", features = ["asio"] }
-directories = "6.0.0"
-eframe = { version = "0.36.1", features = ["glow"] }
-egui = "0.36.1"
-ringbuf = "0.5.1"
-serde = { version = "1.0.229", features = ["derive"] }
-toml = "1.1.5"

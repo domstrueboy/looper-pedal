@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::audio::engine;
-use crate::audio::shared_control::SharedControl;
-use crate::state_machine::{LoopState, LoopStateMachine};
-use crate::config::{self, AppConfig};
-use crate::input::{InputEvent, InputHandler};
-use crate::loop_mirror::{self, LoopMirror};
-use crate::preroll::Preroll;
+use crate::cpal_engine as engine;
+use looper_core::audio::shared_control::SharedControl;
+use looper_core::state_machine::{LoopState, LoopStateMachine};
+use looper_core::config::{self, AppConfig};
+use looper_core::input::{InputEvent, InputHandler};
+use looper_core::loop_mirror::{self, LoopMirror};
+use looper_core::preroll::Preroll;
 
 /// State behind the looper screen: the state machine (owned here, on the
 /// UI thread), the relay into the audio thread, and the live streams.

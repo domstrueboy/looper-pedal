@@ -1,0 +1,13 @@
+[package]
+name = "looper-core"
+version.workspace = true
+edition.workspace = true
+
+# No cpal and no egui: this crate is what the app does, not what it runs
+# on or what it looks like. That is also what lets its tests run on any
+# platform without an audio SDK to build against.
+[dependencies]
+directories = "6.0.0"
+ringbuf = "0.5.1"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.5"

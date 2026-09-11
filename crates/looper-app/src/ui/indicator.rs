@@ -1,4 +1,4 @@
-use crate::state_machine::LoopState;
+use looper_core::state_machine::LoopState;
 
 /// Everything the looper screen displays about the current state,
 /// gathered into one value rather than passed as a row of same-typed

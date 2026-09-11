@@ -1,5 +1,5 @@
-use crate::audio::engine;
-use crate::config::AppConfig;
+use crate::cpal_engine as engine;
+use looper_core::config::AppConfig;
 
 /// State behind the settings screen: what there is to choose from, and
 /// the choice itself. Rendered by `ui/settings.rs`.

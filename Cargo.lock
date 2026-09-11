@@ -1892,13 +1892,21 @@ name = "looper-app"
 version = "0.1.5"
 dependencies = [
  "cpal",
- "directories",
  "eframe",
  "egui",
+ "looper-core",
+ "ringbuf",
+ "winresource",
+]
+
+[[package]]
+name = "looper-core"
+version = "0.1.5"
+dependencies = [
+ "directories",
  "ringbuf",
  "serde",
  "toml",
- "winresource",
 ]
 
 [[package]]

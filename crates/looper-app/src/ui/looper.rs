@@ -1,5 +1,5 @@
 use crate::app::Action;
-use crate::state_machine::LoopState;
+use looper_core::state_machine::LoopState;
 use crate::looper::LooperState;
 use crate::ui::indicator;
 

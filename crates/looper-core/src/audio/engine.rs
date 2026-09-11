@@ -1,6 +1,9 @@
+//! The audio path: what happens to samples between the device's two
+//! callbacks. Nothing here opens a device or knows what one is - the
+//! backend hands buffers in and takes them out again.
+
 use std::sync::Arc;
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::{
     HeapCons, HeapProd, HeapRb,
     traits::{Consumer, Producer, Split},
@@ -9,141 +12,17 @@ use ringbuf::{
 use super::loop_stack::LoopStack;
 use super::shared_control::SharedControl;
 use crate::config::AppConfig;
-use crate::sample;
 use crate::state_machine::LoopState;
 
 /// Bounds one callback's worth of work at a fixed size, so the scratch
 /// buffers can be taken up front. Not a setting - it's about what the
 /// driver might hand us, not about how anyone wants the app to behave.
-const SCRATCH_CAPACITY: usize = 32768;
-
-// Offered in settings, filtered to what the chosen device supports.
-const CANDIDATE_SAMPLE_RATES: [u32; 5] = [44_100, 48_000, 88_200, 96_000, 192_000];
-
-/// Reports rather than panics: without a console there'd be nothing to
-/// see if this failed, so the settings screen shows it instead.
-fn asio_host() -> Result<cpal::Host, String> {
-    cpal::host_from_id(cpal::HostId::Asio).map_err(|e| format!("ASIO host unavailable: {e}"))
-}
-
-pub fn available_asio_devices() -> Result<Vec<String>, String> {
-    asio_host()?
-        .devices()
-        .map_err(|e| format!("failed to enumerate ASIO devices: {e}"))
-        .map(|devices| devices.map(|d| d.to_string()).collect())
-}
-
-fn find_device(device_name: &str) -> Result<cpal::Device, String> {
-    asio_host()?
-        .devices()
-        .map_err(|e| format!("failed to enumerate ASIO devices: {e}"))?
-        .find(|d| d.to_string() == device_name)
-        .ok_or_else(|| format!("ASIO device '{device_name}' not found"))
-}
-
-/// Candidate rates `device_name` actually supports, in i32.
-fn supported_sample_rates(device_name: &str) -> Result<Vec<u32>, String> {
-    let device = find_device(device_name)?;
-    let configs: Vec<_> = device
-        .supported_output_configs()
-        .map_err(|e| format!("failed to query supported configs: {e}"))?
-        .collect();
-
-    Ok(CANDIDATE_SAMPLE_RATES
-        .into_iter()
-        .filter(|&rate| {
-            configs
-                .iter()
-                .any(|c| c.sample_format() == cpal::SampleFormat::I32 && c.contains_rate(rate))
-        })
-        .collect())
-}
-
-/// Hardware input channel count.
-fn input_channel_count(device_name: &str) -> Result<u16, String> {
-    let device = find_device(device_name)?;
-    let config = device
-        .default_input_config()
-        .map_err(|e| format!("failed to get default input config: {e}"))?;
-    Ok(config.channels())
-}
-
-/// Both of the above, which is the only way the settings screen wants
-/// them. Falls back to empty/zero rather than surfacing the error - a
-/// device that answers neither can't be started, and the screen says so
-/// from the empty lists themselves.
-pub fn rates_and_channels(device_name: &str) -> (Vec<u32>, u16) {
-    (
-        supported_sample_rates(device_name).unwrap_or_default(),
-        input_channel_count(device_name).unwrap_or(0),
-    )
-}
-
-/// Negotiates an input/output config at `sample_rate`, asserting the i32
-/// format this project is built around (the iD4 MkII's native format).
-/// Errors rather than panics: mismatches are recoverable in settings.
-fn open_device_and_config(
-    device_name: &str,
-    sample_rate: u32,
-) -> Result<(cpal::Device, cpal::StreamConfig), String> {
-    let device = find_device(device_name)?;
-
-    let input_config = device
-        .default_input_config()
-        .map_err(|e| format!("failed to get default input config: {e}"))?;
-    let output_config = device
-        .default_output_config()
-        .map_err(|e| format!("failed to get default output config: {e}"))?;
-    if input_config.sample_format() != output_config.sample_format() {
-        return Err("input and output must share a sample format".to_string());
-    }
-    if input_config.sample_format() != cpal::SampleFormat::I32 {
-        return Err(format!(
-            "unsupported sample format {:?} (expected i32)",
-            input_config.sample_format()
-        ));
-    }
-
-    // `supported_output_configs()` lists a SEPARATE entry per channel count
-    // at each rate, so the device's full count has to be matched explicitly
-    // or we'd silently open the first (e.g. mono) entry.
-    let full_channels = input_config.channels();
-    let output_configs: Vec<_> = device
-        .supported_output_configs()
-        .map_err(|e| format!("failed to query supported configs: {e}"))?
-        .collect();
-    let matching_range = output_configs
-        .into_iter()
-        .find(|c| {
-            c.sample_format() == cpal::SampleFormat::I32
-                && c.channels() == full_channels
-                && c.contains_rate(sample_rate)
-        })
-        .ok_or_else(|| format!("{sample_rate} Hz is not supported by '{device_name}'"))?;
-
-    let config: cpal::StreamConfig = matching_range.with_sample_rate(sample_rate).into();
-    println!(
-        "Stream config: {} Hz, {} channel(s), buffer size: {:?}",
-        config.sample_rate, config.channels, config.buffer_size
-    );
-
-    Ok((device, config))
-}
+pub const SCRATCH_CAPACITY: usize = 32768;
 
 /// Seconds of captured audio the UI thread's copy can fall behind by
 /// before samples start being dropped. Generous: losing any means the
 /// recorded loop can't be saved.
 const CAPTURE_BUFFER_SECONDS: usize = 2;
-
-/// The live streams, plus the channel the UI thread reads captured
-/// samples from - it keeps its own copy of the loop, since the layer
-/// stack itself is out of reach inside the output callback.
-pub struct LooperStreams {
-    pub input: cpal::Stream,
-    pub output: cpal::Stream,
-    pub sample_rate: u32,
-    pub captured: HeapCons<f32>,
-}
 
 /// Holds the recorded signal back to where the monitored one is.
 ///
@@ -193,7 +72,7 @@ impl MonitorDelay {
 /// A struct rather than a closure body so the path can be driven by a
 /// test - a cpal callback needs an open device, which makes anything
 /// written inside one unreachable.
-struct InputPath {
+pub struct InputPath {
     control: Arc<SharedControl>,
     channels: u16,
     input_channel: u16,
@@ -205,7 +84,7 @@ struct InputPath {
 }
 
 impl InputPath {
-    fn process(&mut self, data: &[f32]) {
+    pub fn process(&mut self, data: &[f32]) {
         // Bound each chunk to the fixed-size scratch buffer whatever the
         // driver hands us: overrunning it would panic inside a real-time
         // callback. Never happens in practice, but cheap.
@@ -246,7 +125,7 @@ impl InputPath {
 /// The output half: the dry signal, the loop mixed onto it, and the
 /// overdub written back. Owns `LoopStack` outright - it lives here and
 /// nowhere else, which is why nothing needs a lock to reach it.
-struct OutputPath {
+pub struct OutputPath {
     control: Arc<SharedControl>,
     channels: u16,
     dry: Vec<f32>,
@@ -262,7 +141,7 @@ struct OutputPath {
 }
 
 impl OutputPath {
-    fn process(&mut self, data: &mut [f32]) {
+    pub fn process(&mut self, data: &mut [f32]) {
         // Same chunk-bounding as the input path.
         for out in data.chunks_mut(SCRATCH_CAPACITY * self.channels as usize) {
             let frames = out.len() / self.channels as usize;
@@ -331,14 +210,14 @@ impl OutputPath {
 /// Both halves and the rings between them, built as one piece because
 /// that is where the recorded signal's alignment against the monitored
 /// signal is decided - see the prefill below.
-struct AudioPath {
-    input: InputPath,
-    output: OutputPath,
+pub struct AudioPath {
+    pub input: InputPath,
+    pub output: OutputPath,
 }
 
 /// Everything downstream of the device: no cpal types, so a test can
 /// build one and push buffers through it.
-fn build_audio_path(
+pub fn build_audio_path(
     control: &Arc<SharedControl>,
     settings: &AppConfig,
     sample_rate: u32,
@@ -412,92 +291,6 @@ fn build_audio_path(
     (path, capture_rx)
 }
 
-/// Opens the device named in `settings` for input and output. Only its
-/// chosen input channel is captured, treated as mono and duplicated
-/// across every output channel; live input always passes through,
-/// recording/looping follows `control`. `LoopStack` lives only inside the
-/// output path, so nothing here needs a lock.
-/// `restored` seeds the layer stack with a loop saved earlier, already
-/// held to these settings by `loop_mirror::load`.
-pub fn build_looper_streams(
-    control: Arc<SharedControl>,
-    settings: &AppConfig,
-    restored: &[Vec<f32>],
-) -> Result<LooperStreams, String> {
-    let (device, config) = open_device_and_config(&settings.device_name, settings.sample_rate)?;
-    let sample_rate = config.sample_rate;
-    let channels = config.channels;
-    if settings.input_channel >= channels {
-        return Err(format!(
-            "input channel {} is out of range (device has {channels} channel(s))",
-            settings.input_channel + 1
-        ));
-    }
-
-    let (path, captured) = build_audio_path(&control, settings, sample_rate, channels, restored);
-    let AudioPath {
-        mut input,
-        mut output,
-    } = path;
-
-    // The audio path works in f32; this device is i32 (asserted above).
-    // Converting here, either side of the callback, is what keeps the
-    // format assumption at the edge instead of threaded through the path
-    // - and it's the job the hardware layer takes over when the backends
-    // land, at which point a device that isn't i32 becomes openable.
-    let block = SCRATCH_CAPACITY * channels as usize;
-    let mut input_scratch = vec![0.0f32; block];
-    let mut output_scratch = vec![0.0f32; block];
-
-    let input_stream = device
-        .build_input_stream(
-            config.clone(),
-            move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                for chunk in data.chunks(block) {
-                    let converted = &mut input_scratch[..chunk.len()];
-                    for (slot, &raw) in converted.iter_mut().zip(chunk) {
-                        *slot = sample::from_pcm32(raw);
-                    }
-                    input.process(converted);
-                }
-            },
-            stream_err_fn,
-            None,
-        )
-        .map_err(|e| format!("failed to build input stream: {e}"))?;
-
-    let output_stream = device
-        .build_output_stream(
-            config,
-            move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
-                for chunk in data.chunks_mut(block) {
-                    let rendered = &mut output_scratch[..chunk.len()];
-                    output.process(rendered);
-                    for (slot, &value) in chunk.iter_mut().zip(rendered.iter()) {
-                        *slot = sample::to_pcm32(value);
-                    }
-                }
-            },
-            stream_err_fn,
-            None,
-        )
-        .map_err(|e| format!("failed to build output stream: {e}"))?;
-
-    input_stream
-        .play()
-        .map_err(|e| format!("failed to start input stream: {e}"))?;
-    output_stream
-        .play()
-        .map_err(|e| format!("failed to start output stream: {e}"))?;
-
-    Ok(LooperStreams {
-        input: input_stream,
-        output: output_stream,
-        sample_rate,
-        captured,
-    })
-}
-
 /// Layer bookkeeping that has to happen exactly when the state changes
 /// rather than on every callback: fixing the loop length once the first
 /// recording ends, and opening or closing an overdub layer.
@@ -524,10 +317,6 @@ fn apply_state_change(
         }
         _ => {}
     }
-}
-
-fn stream_err_fn(err: cpal::Error) {
-    eprintln!("stream error: {err}");
 }
 
 /// Adds `loop_signal` onto `dry` in place. Not clamped - the sum can run

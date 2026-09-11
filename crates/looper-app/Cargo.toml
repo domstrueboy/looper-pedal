@@ -15,10 +15,11 @@ path = "src/main.rs"
 winresource = "0.1"
 
 [dependencies]
-cpal = { version = "0.18.2", features = ["asio"] }
-directories = "6.0.0"
+looper-core = { path = "../looper-core" }
 eframe = { version = "0.36.1", features = ["glow"] }
 egui = "0.36.1"
+
+# Both only for `cpal_engine.rs`, which is on its way into a backend
+# behind `looper-hal`. They leave this crate with it.
+cpal = { version = "0.18.2", features = ["asio"] }
 ringbuf = "0.5.1"
-serde = { version = "1.0.229", features = ["derive"] }
-toml = "1.1.5"

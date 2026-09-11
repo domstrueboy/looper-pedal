@@ -4,17 +4,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-mod audio;
-mod config;
-mod input;
-mod loop_mirror;
+mod cpal_engine;
 mod looper;
-mod preroll;
-mod sample;
 mod settings;
-mod state_machine;
 mod ui;
-mod wav;
 
 use std::time::Instant;
 

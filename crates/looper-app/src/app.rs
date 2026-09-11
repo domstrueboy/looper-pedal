@@ -1,4 +1,4 @@
-use crate::config::AppConfig;
+use looper_core::config::AppConfig;
 use crate::looper::LooperState;
 use crate::settings::SettingsState;
 

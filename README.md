@@ -1,22 +1,24 @@
 # Looper Pedal
 
 A minimal single-track looper pedal replacement for practicing guitar
-through an ASIO audio interface - one loop, stacked from overdub
-layers. Standalone Windows app - no DAW, no plugin host. See `docs/user-guide.md` for how to use it; this document
-covers the architecture and how to build it.
+through an audio interface - one loop, stacked from overdub layers.
+Standalone app, no DAW and no plugin host; Windows today, with the device
+layer split off so that other platforms are a backend rather than a
+rewrite. See `docs/user-guide.md` for how to use it; this document covers
+the architecture and how to build it.
 
 ## Architecture
 
-The app owns the ASIO device directly (input + output) rather than being
-a plugin, since ASIO devices are typically single-client. Audio flows
-through a lock-free pipeline entirely within `src/audio/`, driven by a
-state value published from the UI thread.
+The app opens an audio device directly (input + output) rather than being
+a plugin. Which device, and through which driver, is chosen in Settings:
+ASIO where a driver is installed, WASAPI otherwise. Audio flows through a
+lock-free pipeline driven by a state value published from the UI thread.
 
 ```
-Guitar -> ASIO in (selected channel only) -> live monitor (always audible)
+Guitar -> audio in (selected channel only) -> live monitor (always audible)
                                            -> mixed with loop playback
                                               (sum of all layers)
-                                           -> duplicated to every ASIO out
+                                           -> duplicated to every output
 ```
 
 Only the input channel chosen in Settings is captured - it's treated as
@@ -24,6 +26,40 @@ mono internally (recorded, looped) and duplicated equally across every
 output channel, so a single guitar input is centered in both ears rather
 than only coming out of one side. NAM (Neural Amp Modeler) integration is
 explicitly out of scope for now - the signal is clean/dry throughout.
+
+Samples are `f32` everywhere above the device, full scale at +/-1.0.
+Whatever format the hardware actually speaks - i16, i24, i32, f32 - stops
+at the backend, so no format assumption reaches the code that decides
+what the app does. `sample.rs` owns the conversion at the two edges that
+still deal in integers: the device, and the saved WAV.
+
+### Crates
+
+```mermaid
+flowchart TD
+    APP["looper-app<br/>window, shell, icon"]
+    UI["looper-ui-egui<br/>the screens"]
+    CORE["looper-core<br/>the pedal itself"]
+    HAL["looper-hal<br/>devices, formats, streams"]
+
+    APP --> UI
+    APP --> CORE
+    APP --> HAL
+    UI --> CORE
+    UI --> HAL
+    CORE --> HAL
+```
+
+Not a chain, and the direction is the point. `looper-hal` sits at the
+bottom and has never heard of loops, layers or takes; `looper-core` knows
+what the pedal does and nothing about `cpal` or `egui`. So porting to
+another operating system means writing an `AudioBackend`, and a second
+look - or another toolkit - is a crate beside `looper-ui-egui` rather
+than a change to either of the two below it.
+
+`looper-hal` has no dependencies at all unless its `cpal` feature is
+asked for, which is what lets `cargo test -p looper-core` run the bulk of
+the suite on any platform with no audio SDK to build against.
 
 ### Thread boundary
 
@@ -40,15 +76,63 @@ handful of atomics - no mutex anywhere in the audio path.
   reads `SharedControl`'s published state to decide whether to feed
   captured samples toward the recorder.
 
-Both callback bodies are `InputPath::process` and `OutputPath::process`
-rather than closure bodies, so the whole path can be driven by a test
-without opening a device - which is how the recording alignment below is
-measured.
+Both callback bodies are `InputPath::process` and `OutputPath::process`,
+which is how the backend reaches them: they implement `looper-hal`'s
+`InputProcessor` and `OutputProcessor`. Those impls live in `looper-core`
+because the orphan rule puts them there, and rightly - the paths and the
+promise they keep (no allocation, no locks, bounded work) belong
+together. It also means the whole path can be driven by a test without
+opening a device, which is how the recording alignment below is measured.
 
 The callback only ever sees the published state *value*, never the
 transitions, so it detects those itself by comparing against the state it
 saw last: that's when the loop length gets fixed and an overdub layer is
 opened or closed.
+
+The one thing that crosses without being an atomic or a ring is
+`StreamFault`, which a failing stream writes to and the screen reads. It
+is deliberately *not* part of `SharedControl`: it is touched at most a
+handful of times in a stream's life, and only once one has already gone
+wrong, so a lock there costs nothing and keeps the message a flag could
+not.
+
+## Writing a backend
+
+A backend is an `AudioBackend`, and there are four things it answers:
+what devices exist, what each will agree to, how to negotiate a format,
+and how to start. `looper-hal/src/mock.rs` is the smallest complete one -
+no device behind it at all - and `cpal_backend.rs` is the real one.
+
+Three things the existing backends had to get right, all of them learned
+from hardware rather than from documentation:
+
+- **A device is identified by name *and* direction.** WASAPI presents an
+  interface's capture and render halves as separate devices under the
+  *same name*, so a lookup by name alone finds whichever the driver
+  listed first. Worse, handing a render endpoint to a capture stream does
+  not fail - `cpal` turns it into a loopback and you silently record the
+  speakers. `caps` takes a whole `DeviceInfo` for exactly this reason.
+- **Opening is two-phase.** `open` negotiates and stops; `start` takes
+  the processors. The caller cannot build them earlier, because ring
+  sizes, the monitoring delay and the layer stack are all measured in
+  samples against the rate and channel counts that were actually
+  *granted* - and a shared-mode endpoint hands back its own mix rate
+  whatever was asked for.
+- **Input and output channel counts are separate.** On a split backend
+  the capture end is often narrower than the render end. One count fed to
+  both paths de-interleaves at the wrong stride, which produces no error
+  at all - just the wrong samples.
+
+Two `looper-hal` examples exist to be run against real hardware, since
+none of this can be checked without it:
+
+```powershell
+cargo run -p looper-hal --features asio --example list_devices
+cargo run -p looper-hal --features asio --example open_device -- asio
+```
+
+`open_device` opens a device for real and reports drift and wander
+between the two ends - see "Recording alignment".
 
 ## Module layout
 
@@ -57,18 +141,18 @@ only ever through atomics or a ring buffer.
 
 ```mermaid
 flowchart TB
-    GUITAR(["guitar - ASIO in"])
-    SPEAKERS(["ASIO out"])
+    GUITAR(["guitar - audio in"])
+    SPEAKERS(["audio out"])
 
-    subgraph UI["UI thread - one frame at a time"]
+    subgraph UITHREAD["UI thread - one frame at a time"]
         direction TB
-        subgraph FW["framework-aware - the only egui in the app"]
+        subgraph FW["looper-app + looper-ui-egui - the only egui"]
             MAIN["main.rs<br/>window, frame loop, tick"]
-            UIL["ui/looper.rs"]
-            UIS["ui/settings.rs"]
-            UII["ui/indicator.rs"]
+            UIL["ui-egui/looper.rs"]
+            UIS["ui-egui/settings.rs"]
+            UII["ui-egui/indicator.rs"]
         end
-        subgraph MODEL["plain data - no egui, no cpal"]
+        subgraph MODEL["looper-core - plain data, no egui, no cpal"]
             APP["app.rs<br/>which screen is up"]
             LOOPER["looper.rs<br/>looper-screen state"]
             SET["settings.rs"]
@@ -83,13 +167,17 @@ flowchart TB
 
     SHARED(["SharedControl<br/>atomics only"])
     CAPTURE(["capture ring"])
+    FAULT(["StreamFault"])
 
-    subgraph AUDIO["cpal callbacks - real-time: no locks, no allocation"]
-        direction TB
+    subgraph AUDIO["driver callbacks - real-time: no locks, no allocation"]
         INPATH["InputPath<br/>channel pick, MonitorDelay"]
         BRIDGE(["passthrough ring<br/>recorder ring"])
         OUTPATH["OutputPath<br/>monitor plus loop, overdub"]
         STACK["LoopStack<br/>the layers"]
+    end
+
+    subgraph HAL["looper-hal - converts, chunks, owns the device"]
+        BACKEND["AudioBackend<br/>ASIO, WASAPI, mock"]
     end
 
     MAIN --> UIL
@@ -106,17 +194,23 @@ flowchart TB
     LOOPER --> MIRROR
     SET --> CFG
     MIRROR --> WAV
+    APP --> BACKEND
+    SET --> BACKEND
 
     LOOPER ==>|"state, clear, remove layer"| SHARED
     SHARED ==>|"loop length, position, layers, underruns"| LOOPER
     SHARED <--> INPATH
     SHARED <--> OUTPATH
 
-    GUITAR --> INPATH
+    GUITAR --> BACKEND
+    BACKEND --> INPATH
     INPATH --> BRIDGE
     BRIDGE --> OUTPATH
     OUTPATH --> STACK
-    OUTPATH --> SPEAKERS
+    OUTPATH --> BACKEND
+    BACKEND --> SPEAKERS
+    BACKEND ==>|"on failure"| FAULT
+    FAULT ==> LOOPER
     INPATH ==>|"delayed samples"| CAPTURE
     CAPTURE ==> MIRROR
 ```
@@ -131,55 +225,53 @@ Three asymmetries the picture makes plain, and the prose above hides:
   handful of atomics. Audio to UI is those, plus a whole stream of
   samples through the capture ring, which is why the UI thread's copy
   of the loop exists at all.
-- **`ui/` is a leaf.** It reads a model and returns an `Action`; it
-  never writes one. Swapping GUI library means replacing the two boxes
-  in the framework-aware group and nothing below them.
+- **`ui-egui/` is a leaf.** It reads a model and returns an `Action`; it
+  never writes one. Swapping GUI library means replacing that crate and
+  `main.rs`'s shell, and nothing below them.
 
 The files themselves:
 
 ```
-src/
-  main.rs                    eframe glue: window setup, ticking the
-                              looper, and handing each frame to a
-                              screen renderer
-  app.rs                     which screen is up, screen switching, and
-                              acting on what a renderer reports back
-  looper.rs                  looper-screen state: state machine, the audio
-                              relay, the live streams, per-frame tick
-  settings.rs                settings-screen state: device/rate/channel
+crates/
+  looper-hal/                devices, formats, streams - no looping
+    src/lib.rs                the traits and types every backend meets
+    src/cpal_backend.rs       ASIO and WASAPI, behind the `cpal` feature
+    src/mock.rs               a backend with no device, for tests
+    examples/                 list_devices, open_device - need hardware
+  looper-core/               the pedal itself - no cpal, no egui
+    src/looper.rs             looper-screen state: state machine, the
+                              audio relay, the live stream, per-frame tick
+    src/settings.rs           settings-screen state: backend/device/rate
                               lists and what's selected
-  config.rs                  the settings, as TOML in the per-user
+    src/action.rs             what a rendered frame asks the app to do
+    src/config.rs             the settings, as TOML in the per-user
                               config dir (config_tests.rs)
-  build.rs                   generates the .ico from `ui/icon.rs` and
-                              embeds it as the exe's icon resource
-  input.rs                   short-press vs long-press-clear detection
-                              (input_tests.rs)
-  state_machine.rs           the pedal logic - pure, no audio and no
-                              egui (state_machine_tests.rs)
-  loop_mirror.rs             the UI thread's own copy of the loop, and
+    src/input.rs              short-press vs long-press-clear detection
+    src/state_machine.rs      the pedal logic - pure, no audio, no egui
+    src/preroll.rs            the countdown before the first recording
+    src/loop_mirror.rs        the UI thread's own copy of the loop, and
                               saving it (loop_mirror_tests.rs)
-  preroll.rs                 the countdown before the first recording
-                              (preroll_tests.rs)
-  wav.rs                     mono 32-bit PCM, by hand (wav_tests.rs)
-  audio/
-    engine.rs                device enumeration, config negotiation, the
-                              actual cpal streams and audio callbacks
-    shared_control.rs         lock-free UI <-> audio thread relay
-    loop_stack.rs              pre-allocated stack of aligned mono loop
-                              layers (loop_stack_tests.rs)
-  ui/                        rendering only - each screen is a
-                              `render(ui, model) -> Option<Action>` fn
-    looper.rs                 the looper screen
-    settings.rs               the settings screen
-    indicator.rs              state circle + label + progress bar widget
-    icon.rs                   the app icon, drawn as RGBA at any size
-                              (icon_tests.rs)
+    src/wav.rs                mono 32-bit PCM, by hand (wav_tests.rs)
+    src/sample.rs             f32 <-> 32-bit PCM, one definition
+    src/audio/engine.rs       the audio path, and opening a looper on a
+                              backend (engine_tests.rs)
+    src/audio/loop_stack.rs   pre-allocated stack of aligned mono layers
+    src/audio/shared_control.rs  lock-free UI <-> audio thread relay
+    src/audio/fault.rs        where a failing stream leaves word
+  looper-ui-egui/            rendering only - `render(ui, model) -> Action?`
+    src/looper.rs             the looper screen
+    src/settings.rs           the settings screen
+    src/indicator.rs          state circle + label + progress bar widget
+  looper-app/                the binary
+    src/main.rs               eframe glue: window, frame loop, tick
+    src/app.rs                which screen is up, and acting on actions
+    src/icon.rs               the app icon, drawn as RGBA at any size
+    build.rs                  generates the .ico from `icon.rs`
 ```
 
-`app.rs`, `looper.rs` and `settings.rs` hold no `egui::` types at all, so
-the app model isn't tied to the library drawing it - `main.rs` and `ui/`
-are the only framework-aware parts. Each model file pairs with a renderer
-of the same name under `ui/`.
+`looper-core` holds no `egui::` types at all and `looper-hal` holds no
+looping logic, so neither end can quietly acquire a dependency on the
+other. `main.rs` and `looper-ui-egui` are the only framework-aware parts.
 
 Tests live in sibling `*_tests.rs` files (via `#[path = "..."] mod tests;`)
 rather than inline, to keep the implementation files themselves short -
@@ -252,11 +344,12 @@ recorded at, and Settings' single "Loop volume" is the only control over
 them - it scales the whole stack, still leaving the live passthrough
 alone.
 
-Stacked takes can sum past what an `i32` sample holds, so layers are
-summed in 64-bit and the loop volume is applied to that full-precision
-sum before it's clamped back down (`scale_and_clamp`). Clamping first
-would make a hot stack permanently crunchy; this way turning the loop
-volume down still recovers it.
+Stacked takes can sum past full scale, and nothing upstream clamps them:
+the loop volume is applied to the whole sum, and what is still over full
+scale is clipped once, at the conversion out to the device. Clamping
+earlier would make a hot stack permanently crunchy - and would take the
+live passthrough down with it, since the dry signal is added *after* the
+loop bus. This way turning the loop volume down still recovers it.
 
 ### Recording alignment
 
@@ -271,15 +364,41 @@ every layer stacked on top would inherit the error again. An
 `engine_tests.rs` measurement drives both callbacks with a ramp and
 asserts the offset is zero.
 
-The rings hold `latency_frames + SCRATCH_CAPACITY` so a driver buffer
+The rings hold `latency_frames + MAX_BLOCK_FRAMES` so a driver buffer
 larger than the delay still fits - the prefill, not the capacity, is
 what sets the delay.
+
+All of that assumes the two callbacks are driven by one clock, which is
+worth knowing because backends differ sharply. Measured with
+`open_device` against an Audient iD4 at 44.1 kHz:
+
+| | ASIO | WASAPI (same interface) |
+|---|---|---|
+| shape | one duplex handle | two endpoints, same name |
+| callback period | 64 frames (1.5 ms) | 441 frames (10 ms) |
+| render block | fixed | variable, up to ~970 |
+| drift | 0 ppm | 0 ppm |
+| wander | 64 frames (1.5 ms) | 882 frames (20 ms) |
+
+Neither **drifts**: WASAPI's shared mode runs both ends through the
+Windows audio engine, which resamples onto its own clock - so even two
+*different* interfaces stay in step. What differs is the **wander**.
+ASIO's 64 frames is the floor, being exactly one callback period; WASAPI
+swings by twenty milliseconds, and `MonitorDelay` holds back by a fixed
+amount, so nothing takes that back out. A take can land either side of
+where it was heard, and every layer inherits it again. The settings
+screen says so when a split backend is chosen.
 
 ## Settings & persistence
 
 On first run (or if the saved config no longer opens - e.g. the interface
-was unplugged), the app shows a Settings screen: pick the ASIO device,
-sample rate and input channel, and set anything in the table below. On
+was unplugged), the app shows a Settings screen: pick the driver, the
+device, sample rate and input channel, and set anything in the table
+below. A driver whose devices do both directions (ASIO) shows one device
+picker; one whose devices are single endpoints (WASAPI) shows two, and
+the rates offered are the ones *both* ends will take - a shared-mode
+capture endpoint often offers only its own mix rate while its render half
+claims a range it would have to resample to reach. On
 "Start" this is saved and the app launches straight into the looper on
 subsequent
 runs. The gear icon (top-right, in the looper screen) reopens Settings at
@@ -300,6 +419,14 @@ to a default, so a config written by an older build still loads instead
 of throwing you back to the settings screen. Unknown keys are ignored,
 and comments are allowed, so the file is safe to hand-edit.
 
+Two of those defaults encode what an older file *meant* rather than a
+preference: a missing `backend` reads as `"asio"`, because every config
+written before there were backends came from a build that could only open
+ASIO, and a missing `output_device_name` means the output is the input
+device, which is what a duplex driver has. Retargeting somebody's
+interface on upgrade is the kind of thing that reads as the app
+breaking.
+
 Every setting's default and allowed range is declared once, in
 `config.rs`: the settings screen builds its sliders from those ranges,
 and a hand-edited file is clamped to them on load. Nine hundred layers
@@ -319,11 +446,12 @@ The last two are a memory multiplier - every layer is pre-allocated at
 the full loop length, so it costs `seconds x layers x sample rate x 4`
 bytes, and the settings screen shows the figure next to the sliders.
 
-Deliberately *not* settings: `SCRATCH_CAPACITY` (the bound on one
-callback - what a driver might hand us, not how anyone wants the app to
-behave; it sizes the scratch buffers and the headroom in the rings),
-`CANDIDATE_SAMPLE_RATES` (a probe list, not a choice), and the window
-and widget sizes.
+Deliberately *not* settings, and living in `looper-hal` because they are
+statements about devices rather than about the app: `MAX_BLOCK_FRAMES`
+(the bound on one callback - what a driver might hand us, not how anyone
+wants the app to behave; it sizes the scratch buffers and the headroom in
+the rings) and `CANDIDATE_SAMPLE_RATES` (a probe list, not a choice).
+Nor are the window and widget sizes.
 
 ## Saved loops
 
@@ -378,6 +506,11 @@ consequences worth knowing:
 - Rust via `rustup`, MSVC toolchain (`x86_64-pc-windows-msvc`)
 - Visual Studio Build Tools - "Desktop development with C++" workload
   (needed for linking, and for compiling the ASIO SDK's C++ shim)
+
+Everything below is needed only for the **ASIO** backend, which the app
+crate asks for by enabling `looper-hal`'s `asio` feature. WASAPI needs
+none of it, and neither does `cargo test -p looper-core`:
+
 - LLVM/libclang (needed by `bindgen`, which `asio-sys` uses to generate
   bindings to the ASIO SDK headers)
 - Steinberg ASIO SDK - dual-licensed (GPLv3 or proprietary) since Oct
@@ -388,12 +521,17 @@ consequences worth knowing:
 ## Building & running
 
 ```powershell
-cargo build       # compile
-cargo run         # build + launch
-cargo test        # run the unit tests - no device needed, including the audio path
+cargo build                  # compile the workspace
+cargo run -p looper-app      # build + launch
+cargo test                   # every crate - no device needed, audio path included
+cargo test -p looper-core    # the bulk of the suite, and no ASIO SDK to build
 ```
 
-The app icon is drawn in code (`ui/icon.rs`) rather than stored as an
+The last line is the one to reach for on a machine - or a platform -
+without the ASIO SDK set up: `looper-core` depends on `looper-hal` with
+its `cpal` feature off, so nothing device-shaped enters the build.
+
+The app icon is drawn in code (`icon.rs`) rather than stored as an
 image: a green loop arrow around a red record dot. That means no
 image-decoding dependency and no binary asset in the repo, and it
 renders at any size - the window asks for one, and `build.rs` `include!`s
@@ -402,13 +540,17 @@ resource. Embedding needs `rc.exe` from the Windows SDK; if it's missing
 the build warns and carries on without the exe icon.
 
 Debug builds are console-subsystem binaries, so `cargo run` keeps a
-terminal alongside the window - that's where the stream config, underrun
-warnings and stream errors print. Release builds set
-`windows_subsystem = "windows"` and have no console at all, which also
-means those diagnostics go nowhere; run a debug build when chasing
-audio trouble.
+terminal alongside the window - that's where the stream config and the
+underrun log print. Release builds set `windows_subsystem = "windows"`
+and have no console at all, so the two things worth knowing about reach
+the looper screen instead: a stream that fails says so with a button back
+to Settings, and underruns show as a count naming the setting that fixes
+them. The console still carries more detail, so a debug build is still
+the better place to chase audio trouble from.
 
-The project targets a single specific device family (asserts an i32
-sample format), since it's built around one Audient iD4 MkII - other
-ASIO interfaces that also report i32 should work, but this hasn't been
-tested against others.
+The app is developed against an Audient iD4 MkII, but no longer assumes
+anything about it: the backend negotiates whatever format a device
+reports (i16, i24, i32 or f32) and converts at the edge, so other
+interfaces should work. ASIO is what it is tuned for - WASAPI runs, and
+is what a machine with no ASIO driver gets, at roughly an order more
+latency and with the timing wander noted under "Recording alignment".

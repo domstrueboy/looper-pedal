@@ -12,20 +12,31 @@ how the app is actually used.
 
 ## Status
 
-**v2 is complete.** Working today: an ASIO device / sample-rate /
-input-channel picker with settings persisted as TOML in the per-user
-config directory, always-on live monitoring, the record -> loop -> stop
--> resume cycle on spacebar or button, overdub layers on a control of
-their own with remove-last, a configurable pre-roll before recording,
-long-press clear, the loop surviving restarts as WAV layers, an app
-icon, no console window in release builds, technical + user docs, and a
-Windows CI build/release pipeline.
+**v2 is complete**, and the portability work after it. Working today: a
+driver / device / sample-rate / input-channel picker with settings
+persisted as TOML in the per-user config directory, always-on live
+monitoring, the record -> loop -> stop -> resume cycle on spacebar or
+button, overdub layers on a control of their own with remove-last, a
+configurable pre-roll before recording, long-press clear, the loop
+surviving restarts as WAV layers, an app icon, no console window in
+release builds, technical + user docs, and a Windows CI build/release
+pipeline.
 
-The post-v2 review below has been carried out. It found four
-correctness faults - two in the saved-loop path, two in the recording
-path - and left the module boundaries clean enough for v3's workspace
-split to be drawn around them. What it changed is in README and in the
-history; what it left open is under that heading.
+Since then the app has been split into four crates - `looper-hal`
+(devices), `looper-core` (the pedal), `looper-ui-egui` (the screens) and
+`looper-app` (the shell) - the core moved to `f32`, and a second backend
+(WASAPI) landed beside ASIO. See README's architecture section. What that
+bought, concretely:
+
+- **A port is a backend, not a rewrite.** `looper-hal` is one trait set
+  and has no dependencies unless its `cpal` feature is asked for.
+- **No format assumption survives.** i16/i24/i32/f32 all convert at the
+  backend; the i32 the app was built around is gone from everything
+  above it.
+- **The suite runs anywhere.** `cargo test -p looper-core` needs no
+  audio SDK, on any platform.
+- **The looper screen is testable**, on a mock backend, which closed a
+  post-v2 item that had stood since the review.
 
 Next is v3, which needs ordering before it can start.
 
@@ -41,9 +52,10 @@ Next is v3, which needs ordering before it can start.
   exception.
 - **`Renderer::Glow` is mandatory** - the default wgpu renderer crashes
   (STATUS_ACCESS_VIOLATION) on this machine's Intel UHD graphics.
-- **i32 sample format** is assumed throughout `engine.rs` (the Audient
-  iD4 MkII's native format); generalizing it is part of any non-Windows
-  port.
+- **`f32` above the device, full scale at +/-1.0.** Whatever format the
+  hardware speaks stops at the backend; `sample.rs` owns the conversion
+  at the two edges that still deal in integers (the device, and the
+  saved WAV). Clipping happens once, on the way out.
 - **One small commit per step,** so history stays reviewable step by
   step rather than as one large diff.
 
@@ -150,6 +162,70 @@ hold-to-clear time. Each one's default and range live together in
 file is clamped to them - see README's settings table. The screen scrolls
 now, with Start pinned below it.
 
+## Portability split - done
+
+Between v2 and v3, and not a feature: the aim was to make the app
+reliable across machines and interfaces, and to leave other platforms as
+work rather than as a rewrite. What it produced, in the order it landed:
+config paths became testable; the core moved to `f32`; the tree became a
+workspace; `looper-hal` appeared with its traits and a mock backend; the
+cpal-free half of `engine.rs` and then the screen states moved to
+`looper-core`; a cpal backend arrived and the app swapped onto it; the
+screens became `looper-ui-egui`; the looper screen got tests; WASAPI was
+measured and then offered; failures and underruns reached the screen.
+
+Three decisions worth not re-litigating:
+
+- **`f32` in the core, converted at the backend.** The alternative was
+  keeping `i32` and converting for every non-ASIO device. `f32` is what
+  the eventual NAM and drum work wants anyway, and it made clipping a
+  single event at the edge instead of something the loop bus did to
+  itself.
+- **Backends are runtime trait objects, not `cfg`-picked modules.** One
+  binary offers ASIO *and* WASAPI, which is what a machine with no ASIO
+  driver needs; it is also what Linux's several hosts will need. The
+  mock backend that falls out of it is what made the looper screen
+  testable at all.
+- **Two-phase open.** The caller cannot size a ring, a delay line or a
+  layer stack until it knows the rate that was *granted*, and shared
+  mode grants its own.
+
+### What the hardware said
+
+Neither guessable nor documented; both found by running
+`looper-hal`'s examples against an iD4. Measured at 44.1 kHz:
+
+| | ASIO | WASAPI (same interface) |
+|---|---|---|
+| shape | one duplex handle | two endpoints, same name |
+| callback period | 64 frames (1.5 ms) | 441 frames (10 ms) |
+| drift | 0 ppm | 0 ppm |
+| wander | 64 frames (1.5 ms) | 882 frames (20 ms) |
+
+Drift was the thing to fear and isn't: WASAPI's shared mode resamples
+both ends onto the Windows audio engine's clock, so even two *different*
+interfaces stay in step. Wander is the real cost, and `MonitorDelay`
+holds back by a fixed amount, so nothing takes it out. WASAPI is a
+fallback, labelled as one on the settings screen - not a peer.
+
+Two bugs only hardware could show, both now guarded by the type system
+rather than by care: a device is identified by name *and* direction
+(WASAPI gives an interface's two halves the same name, and a render
+endpoint asked to capture records the speakers instead of failing), and
+two equal device ids do not mean one duplex device.
+
+### Still open from it
+
+- **WASAPI's default input is whatever Windows lists first**, which on
+  this machine is the iD4's *loopback* endpoint - it records what is
+  playing, not the guitar. The only way to tell a loopback from a real
+  input through `cpal` is sniffing the name, and "Loop-back",
+  "Loopback", "Stereo Mix" and "What U Hear" are all different vendors'
+  spellings, some localised. Left alone deliberately: the picker is
+  visible and the choice is saved once. Worth revisiting if anyone
+  actually trips on it.
+- **The by-ear pass is owed twice** - see the post-v2 review below.
+
 ## Open decisions
 
 Worth settling before the work they block starts.
@@ -162,12 +238,10 @@ Worth settling before the work they block starts.
   with step 4's arming window as a count-in), or leave the drums
   free-running and keep time yourself. Recommend quantizing - decided
   before either feature is built, since both depend on it.
-- **Release-build diagnostics** - the console is gone as of step 3, so
-  underrun warnings and stream errors now reach nobody in a release
-  build. Left deliberately: the alternative is a small in-app surface
-  (a status line under the indicator), which is the better long-term
-  answer but is its own UI task. Worth doing if latency trouble ever
-  shows up away from a dev build.
+- ~~**Release-build diagnostics**~~ - **done.** A failed stream shows on
+  the looper screen with a button back to Settings, and underruns show
+  as a running count naming the setting that fixes them. The console
+  still carries more detail in a debug build.
 - **GPL ASIO SDK before sharing binaries** - CI builds against the
   GPLv3 fallback SDK, and depending on how `asio-sys` links its
   compiled shim that can carry GPL obligations onto a distributed exe.
@@ -184,12 +258,18 @@ Worth settling before the work they block starts.
 - Tuner - pitch detection on a decimated copy of the input, analysed on
   a background thread or per UI frame. Never inside the callback: FFT /
   autocorrelation cost is unbounded relative to the audio budget.
-- **macOS port** - moderate effort: make host selection conditional
-  instead of hardcoding `HostId::Asio`, and generalize the i32
-  assumption (CoreAudio commonly reports f32). Realistic once step 1 is
-  done.
-- **Linux port** - the same work, plus backend fragmentation (ALSA vs
-  JACK vs PipeWire) and less predictable low-latency behavior.
+- **macOS port** - both things this used to need are done: host
+  selection is a backend registry, and the format assumption is gone.
+  What is left is `CpalBackend::new(BackendId::COREAUDIO, HostId::CoreAudio,
+  "Core Audio")`, a `cfg` to register it, and running the two
+  `looper-hal` examples against real hardware to find what only hardware
+  tells you - the WASAPI work turned up two such things in an afternoon.
+  Plus whatever eframe wants on macOS, which is its own question.
+- **Linux port** - the same, times the number of hosts worth offering.
+  `cpal` has ALSA and JACK; the registry already shows several backends
+  side by side and skips the ones whose driver isn't installed, which is
+  the shape that fragmentation needs. Low-latency behaviour is the real
+  unknown, and `open_device` is how to find out rather than guess.
 - **Mobile** - not "one more platform". `cpal` and `eframe` are both
   rougher there, and mobile OSes make the low, predictable latency this
   app is built around much harder. Needs a throwaway spike answering
@@ -225,15 +305,17 @@ Still open:
   the driver's own input/output offset. Worth stacking four layers
   against a click before calling it settled. The ring-sizing fix in the
   same area wants the same pass: no underruns reported at whatever
-  latency you actually run.
-- **`looper.rs` still can't be tested.** It owns two `cpal::Stream`s, so
-  the rule that a cancelling press beats a pre-roll expiry on the same
-  frame is a comment rather than a test - only the half that lives in
-  `preroll.rs` is pinned. Its two readouts also call `Instant::now()`
-  instead of using the `now` the frame was ticked with, so they can
-  disagree with the state beside them by microseconds. Both would fall
-  out of separating the streams from the screen state - worth doing if
-  that file grows again, not for its own sake.
+  latency you actually run. **Still open, and now owed twice**: the f32
+  move and the swap onto the hardware layer each changed everything the
+  signal passes through, and each deserves its own pass rather than one
+  covering both.
+- ~~**`looper.rs` still can't be tested**~~ - **done.** It holds one
+  `Box<dyn AudioStream>` now and opens on a mock backend, so the rule
+  that a cancelling press beats a pre-roll expiry on the same frame is a
+  test. Reversing the two lines in `tick` makes it fail with the state on
+  `Looping` rather than `Recording` - the expiry opens a take and the
+  press immediately closes it, leaving an empty loop playing. The two
+  readouts answer from the frame's own clock as well.
 - **Take layout still exists twice** - incrementally in
   `read_mixed_with_overdub`, in one go in `LoopMirror::layer`, with a
   test asserting they agree. Worth folding into one if a third caller
@@ -253,7 +335,7 @@ tests cover every one.
   that far ahead of the beat it was played against, and every layer
   inherits the error again. Measured by a test; it read 8, 20 and 50
   samples at the matching latency settings before the fix.
-- **Ring capacity of `latency_frames + SCRATCH_CAPACITY`** - looks
+- **Ring capacity of `latency_frames + MAX_BLOCK_FRAMES`** - looks
   over-generous. It was `latency_frames * 2` with half of it prefilled,
   which leaves room for exactly the delay: a driver buffer larger than
   that spilled on every single callback.
@@ -270,9 +352,12 @@ tests cover every one.
   mixed into the output *before* the incoming sample is recorded over
   it. Reverse the order and the player hears their own take echoed back
   on top of their live signal a buffer later.
-- **64-bit sum, then gain, then clamp** (`mix_at` / `scale_and_clamp`) -
-  clamping per layer in 32-bit made a hot four-layer stack permanently
-  clipped, with the volume slider unable to rescue it.
+- **Nothing clamps until the device** (`mix_at`, `mix_add`, then
+  `sample::to_pcm32`) - clamping per layer made a hot four-layer stack
+  permanently clipped, with the volume slider unable to rescue it, and
+  took the live passthrough down with it since the dry signal is added
+  after the loop bus. The 64-bit sum this replaced existed only because
+  four `i32`s overflow; `f32` has the headroom.
 - **The recorded window (`start` / `written`) in `Layer`** - not an
   optimisation for its own sake. It's what lets a layer be reused
   without memsetting megabytes inside the audio callback, and the
@@ -283,9 +368,22 @@ tests cover every one.
 - **`Arming` published to the audio thread** rather than hidden behind
   `Idle`, which would work today. v3's count-in needs the callback to
   know it's counting down.
-- **`SCRATCH_CAPACITY` chunking in both callbacks** - bounds one
+- **Chunking in both callbacks, as well as in the backend** - bounds one
   callback's work whatever the driver hands us. Overrunning the fixed
-  scratch buffers would panic inside the real-time path.
+  scratch buffers would panic inside the real-time path. It looks
+  redundant now that `looper-hal` chunks too, and is not: the tests
+  drive these paths directly, with no backend in front of them, so
+  removing it would leave the bound untested.
+- **`caps` taking a whole `DeviceInfo`** rather than a device's name -
+  WASAPI presents an interface's capture and render halves under the
+  *same name*, so a lookup by name alone answers about whichever the
+  driver listed first. A render endpoint handed to a capture stream
+  doesn't fail either; `cpal` makes it a loopback and records the
+  speakers.
+- **Two-phase `open` then `start`** - looks like ceremony. Ring sizes,
+  the monitoring delay and the layer stack are all measured in samples
+  against the rate that was actually *granted*, and a shared-mode
+  endpoint hands back its own mix rate whatever was asked for.
 
 ## v3: extended build
 
@@ -298,8 +396,8 @@ Two things to settle first, at the top of a v3 session:
 - **Order the work**, the way v2 was ordered. The dependencies:
   per-layer mute finishes the track abstraction, which the mic track
   needs; one scheduler underpins the metronome, which the drum machine
-  is a richer version of; the workspace split is easiest now that the
-  review has settled the module boundaries.
+  is a richer version of. The workspace split is no longer among them -
+  it is done, and the crates it produced are where this work now lands.
 
 Still "run and play", not a DAW: preconfigured mic + guitar tracks, a
 few more if wanted, metronome, drum machine, tuner - kept as small and
@@ -333,10 +431,11 @@ single-purpose as the mini looper is today.
   set by eye. A cheap interim version (two channels summed to mono into
   one loop, no track abstraction needed) was considered for v2 and
   dropped in favour of doing it properly here.
-- **Mini stays mini** - a Cargo workspace with a shared core crate
-  (audio engine, buffers, state machine) and two thin binaries (`mini`,
-  `extended`) assembling different feature sets, so the simple build
-  never carries multitrack code paths it doesn't use.
+- **Mini stays mini** - the workspace exists now (`looper-hal`,
+  `looper-core`, `looper-ui-egui`, `looper-app`), so what is left of
+  this is a second thin binary beside `looper-app` assembling a
+  different feature set, so the simple build never carries multitrack
+  code paths it doesn't use.
 
 ## CI / releases
 

@@ -9,24 +9,35 @@ layers on top of the loop.
 
 The first time you launch the app, you'll see a **Settings** screen:
 
-1. **ASIO device** - pick your audio interface
-2. **Sample rate** - pick a rate your interface supports (44100 Hz is a
-   safe default)
-3. **Input channel** - pick whichever input your guitar cable is
+1. **Driver** - how the app talks to your interface. Pick **ASIO** if
+   it's offered: it's what your interface's own driver provides, and it's
+   the one with low enough latency to play through comfortably. **WASAPI**
+   is always there and needs no driver of its own, but it's noticeably
+   less immediate - see "If ASIO isn't offered" below. This row only
+   appears when there's more than one to choose from.
+2. **Device** - pick your audio interface. On ASIO one device is both
+   your input and your output. On WASAPI they're listed separately, so
+   you'll see an **Input** and an **Output** row instead - and watch out
+   for anything called "Loop-back" or "Stereo Mix", which records what's
+   *playing* rather than what you're playing.
+3. **Sample rate** - pick a rate your interface supports (44100 Hz is a
+   safe default). Only rates both ends can manage are listed, so the
+   list may be shorter on WASAPI.
+4. **Input channel** - pick whichever input your guitar cable is
    actually plugged into (e.g. "Input 1"). Only this one channel is used;
    it's centered equally in both ears when you monitor, so it doesn't
    matter that it came from a single input.
-4. **Loop volume** - how loud the loop plays back relative to your live
+5. **Loop volume** - how loud the loop plays back relative to your live
    signal
-5. **Record delay** - how long to wait after you hit record before it
+6. **Record delay** - how long to wait after you hit record before it
    actually starts capturing, so you have time to get your hands back on
    the guitar. Defaults to **5 seconds**; drag it down to **off** if
    you'd rather it start immediately.
-6. **Hold to clear** - how long the button or spacebar has to be held
+7. **Hold to clear** - how long the button or spacebar has to be held
    down to wipe the loop. Two seconds by default.
-7. **Latency** - how much headroom the audio engine keeps. Lower feels
+8. **Latency** - how much headroom the audio engine keeps. Lower feels
    more immediate; if the sound crackles or drops out, raise it.
-8. **Max loop length** and **Max layers** - the longest loop you can
+9. **Max loop length** and **Max layers** - the longest loop you can
    record and how many layers you can stack. Both are reserved in
    memory up front, so the line underneath tells you what your choices
    will cost - there's no reason to ask for more than you'll use.
@@ -137,6 +148,39 @@ choices, so you're not starting from scratch.
 Your loop is kept while you're in there and comes back when you press
 **Start** - it's read from the saved WAV files, the same way it is when
 you reopen the app.
+
+## If ASIO isn't offered
+
+ASIO is provided by your interface's own driver. If the Driver row only
+shows **WASAPI**, install the driver from your interface manufacturer's
+site and restart the app.
+
+WASAPI works, and is worth using if that's all you have - but it is
+Windows' shared audio path rather than a direct line to your interface,
+and two things follow:
+
+- **It's less immediate.** Expect something like ten times ASIO's delay
+  between playing a note and hearing it. If you monitor through your
+  interface's own headphone output instead, that stops mattering for
+  what you *hear* - but it still affects where your overdubs land.
+- **Overdubs are looser.** Takes can sit up to about 20 milliseconds
+  either side of where you heard them, and each layer you stack inherits
+  it afresh. Fine for practising over a chord loop; not tight enough for
+  anything percussive. The Settings screen says so when you pick it.
+
+## When something goes wrong
+
+Two messages can appear at the top of the looper screen:
+
+- **"Audio stopped: ..."** - the interface stopped responding, most
+  often because it was unplugged or another program took it. The loop in
+  memory is safe and already saved. Click **Choose a device** to pick it
+  again (or pick a different one) and carry on.
+- **"Audio fell behind Nx - raise Latency in Settings"** - the machine
+  couldn't keep up, and there will be small gaps in what you just
+  recorded. Raise **Latency** a notch or two. It counts up over the whole
+  session, so a number that stops growing means whatever caused it has
+  passed.
 
 ## Not yet supported
 

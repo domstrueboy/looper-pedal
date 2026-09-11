@@ -4,7 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-mod ui;
+mod icon;
 
 use std::time::Instant;
 
@@ -17,7 +17,7 @@ use looper_hal::{Backends, cpal_backend::default_backends};
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let action = match &mut self.screen {
-            Screen::Settings(settings) => ui::settings::render(ui, settings, &self.backends),
+            Screen::Settings(settings) => looper_ui_egui::settings::render(ui, settings, &self.backends),
             Screen::Looper(looper) => {
                 // Long-press detection and the pre-roll countdown need
                 // continuous frames, not just input-triggered repaints.
@@ -29,7 +29,7 @@ impl eframe::App for App {
                 // past, for one frame, whenever a pre-roll ran out.
                 let space_down = ui.ctx().input(|i| i.key_down(egui::Key::Space));
                 looper.tick(space_down, Instant::now());
-                ui::looper::render(ui, looper)
+                looper_ui_egui::looper::render(ui, looper)
             }
         };
 
@@ -48,7 +48,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([320.0, 400.0])
             .with_icon(egui::IconData {
-                rgba: ui::icon::icon_rgba(WINDOW_ICON_SIZE),
+                rgba: icon::icon_rgba(WINDOW_ICON_SIZE),
                 width: WINDOW_ICON_SIZE,
                 height: WINDOW_ICON_SIZE,
             }),

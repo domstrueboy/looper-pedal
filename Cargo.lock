@@ -1895,6 +1895,7 @@ dependencies = [
  "egui",
  "looper-core",
  "looper-hal",
+ "looper-ui-egui",
  "winresource",
 ]
 
@@ -1914,6 +1915,15 @@ name = "looper-hal"
 version = "0.1.5"
 dependencies = [
  "cpal",
+]
+
+[[package]]
+name = "looper-ui-egui"
+version = "0.1.5"
+dependencies = [
+ "egui",
+ "looper-core",
+ "looper-hal",
 ]
 
 [[package]]

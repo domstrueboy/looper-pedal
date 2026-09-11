@@ -19,5 +19,6 @@ looper-core = { path = "../looper-core" }
 # The backends themselves. ASIO is the only one built today; asking for
 # it here is what pulls `cpal` into the build at all.
 looper-hal = { path = "../looper-hal", features = ["asio"] }
+looper-ui-egui = { path = "../looper-ui-egui" }
 eframe = { version = "0.36.1", features = ["glow"] }
 egui = "0.36.1"

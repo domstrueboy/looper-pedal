@@ -1,4 +1,4 @@
-use crate::app::Action;
+use looper_core::action::Action;
 use looper_core::config::{
     LATENCY_MS_RANGE, LONG_PRESS_MS_RANGE, MAX_LAYERS_RANGE, MAX_LOOP_SECS_RANGE, PREROLL_MS_RANGE,
     VOLUME_PCT_RANGE,

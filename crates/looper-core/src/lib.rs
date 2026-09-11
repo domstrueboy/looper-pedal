@@ -6,6 +6,7 @@
 //! the saved loop. Swapping either end doesn't reach in here, and these
 //! tests run anywhere without an audio SDK to build against.
 
+pub mod action;
 pub mod audio;
 pub mod config;
 pub mod input;

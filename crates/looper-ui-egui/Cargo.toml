@@ -1,0 +1,12 @@
+[package]
+name = "looper-ui-egui"
+version.workspace = true
+edition.workspace = true
+
+# One screen set, drawn with egui. A different toolkit - or a second
+# skin - is another crate beside this one rather than a change to any of
+# the three it draws.
+[dependencies]
+egui = "0.36.1"
+looper-core = { path = "../looper-core" }
+looper-hal = { path = "../looper-hal" }

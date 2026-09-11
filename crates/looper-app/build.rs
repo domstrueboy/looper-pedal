@@ -1,15 +1,15 @@
 // Embeds the app icon into the executable as a Windows icon resource, so
 // Explorer, the taskbar and Alt-Tab show it. The artwork itself is drawn
-// by `src/ui/icon.rs`, included here rather than duplicated - the same
+// by `src/icon.rs`, included here rather than duplicated - the same
 // code draws the window icon at runtime.
-include!("src/ui/icon.rs");
+include!("src/icon.rs");
 
 /// Sizes Windows picks between: small list icons through to the large
 /// Explorer tile.
 const ICON_SIZES: [u32; 5] = [16, 32, 48, 64, 256];
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/ui/icon.rs");
+    println!("cargo:rerun-if-changed=src/icon.rs");
     println!("cargo:rerun-if-changed=build.rs");
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {

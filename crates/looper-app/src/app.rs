@@ -1,3 +1,4 @@
+use looper_core::action::Action;
 use looper_core::config::AppConfig;
 use looper_core::looper::LooperState;
 use looper_core::settings::SettingsState;
@@ -8,13 +9,6 @@ use looper_hal::Backends;
 pub enum Screen {
     Settings(SettingsState),
     Looper(LooperState),
-}
-
-/// What a rendered frame asks the app to do next: the renderers report
-/// intent, `apply` acts on it.
-pub enum Action {
-    Start(AppConfig),
-    OpenSettings,
 }
 
 pub struct App {

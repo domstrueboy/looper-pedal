@@ -1,7 +1,7 @@
-use crate::app::Action;
+use looper_core::action::Action;
 use looper_core::state_machine::LoopState;
 use looper_core::looper::LooperState;
-use crate::ui::indicator;
+use crate::indicator;
 
 /// Both secondary buttons share a size, so the row can be measured and
 /// centered without laying it out twice.

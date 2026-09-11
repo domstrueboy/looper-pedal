@@ -61,16 +61,50 @@ pub fn render(
 /// a device that reports no usable rate or no inputs can't be opened, and
 /// says so instead of offering Start.
 fn controls(ui: &mut egui::Ui, settings: &mut SettingsState, backends: &Backends) -> bool {
-    if settings.devices.is_empty() {
-        ui.colored_label(egui::Color32::RED, "No ASIO devices found.");
+    if settings.backends.is_empty() {
+        ui.colored_label(egui::Color32::RED, "No audio backends in this build.");
+        return false;
+    }
+
+    // Only worth choosing when there is a choice - one backend picks
+    // itself, and a row saying so is a row in the way.
+    if settings.backends.len() > 1 {
+        let previous = settings.config.backend.clone();
+        let selected = settings
+            .backends
+            .iter()
+            .find(|backend| backend.id == settings.config.backend)
+            .map(|backend| backend.label.clone())
+            .unwrap_or_default();
+        egui::ComboBox::from_label("Driver")
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for backend in &settings.backends {
+                    ui.selectable_value(
+                        &mut settings.config.backend,
+                        backend.id.clone(),
+                        &backend.label,
+                    );
+                }
+            });
+        if settings.config.backend != previous {
+            settings.refresh_for_selected_backend(backends);
+        }
+    }
+
+    if settings.inputs.is_empty() {
+        ui.colored_label(egui::Color32::RED, "This driver reports no input devices.");
         return false;
     }
 
     let previous_device = settings.config.device_name.clone();
-    egui::ComboBox::from_label("ASIO device")
+    // "Device" while one does both, "Input" once they are separate -
+    // naming it Input when there is nothing else to pick reads as though
+    // an output picker had gone missing.
+    egui::ComboBox::from_label(if settings.duplex { "Device" } else { "Input" })
         .selected_text(settings.config.device_name.clone())
         .show_ui(ui, |ui| {
-            for name in &settings.devices {
+            for name in &settings.inputs {
                 ui.selectable_value(&mut settings.config.device_name, name.clone(), name);
             }
         });
@@ -78,10 +112,37 @@ fn controls(ui: &mut egui::Ui, settings: &mut SettingsState, backends: &Backends
         settings.refresh_for_selected_device(backends);
     }
 
+    // A backend whose devices are single endpoints needs both ends
+    // naming. Left out entirely when one device does both, rather than
+    // shown greyed: there is nothing there to choose.
+    if !settings.duplex {
+        let previous_output = settings.config.output_device().to_string();
+        let mut chosen = previous_output.clone();
+        egui::ComboBox::from_label("Output")
+            .selected_text(chosen.clone())
+            .show_ui(ui, |ui| {
+                for name in &settings.outputs {
+                    ui.selectable_value(&mut chosen, name.clone(), name);
+                }
+            });
+        if chosen != previous_output {
+            settings.config.output_device_name = Some(chosen);
+            settings.refresh_for_selected_device(backends);
+        }
+
+        // Measured rather than guessed: against ASIO's one callback
+        // period, two endpoints wander by about twenty milliseconds, and
+        // the monitoring delay is fixed so nothing takes it back out.
+        ui.colored_label(
+            egui::Color32::from_rgb(200, 150, 60),
+            "This driver runs the two halves separately, so takes land up\nto ~20 ms from where you heard them. ASIO is tighter.",
+        );
+    }
+
     if settings.sample_rates.is_empty() {
         ui.colored_label(
             egui::Color32::RED,
-            "This device reports no supported sample rate.",
+            "No sample rate both ends agree on.",
         );
         return false;
     }

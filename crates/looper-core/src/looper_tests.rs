@@ -1,5 +1,6 @@
 use super::*;
 
+use looper_hal::BackendId;
 use looper_hal::mock::{self, MockDriver, mock};
 
 /// Small enough to follow by hand, and a rate the mock device offers.
@@ -8,6 +9,7 @@ const PREROLL_MS: u32 = 1_000;
 
 fn settings() -> AppConfig {
     AppConfig {
+        backend: BackendId::MOCK.as_str().to_string(),
         device_name: mock::DEVICE.to_string(),
         sample_rate: RATE,
         preroll_ms: PREROLL_MS,

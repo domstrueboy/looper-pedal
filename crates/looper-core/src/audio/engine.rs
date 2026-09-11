@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use looper_hal::{
-    AudioStream, Backends, DeviceInfo, ErrorSink, InputProcessor, MAX_BLOCK_FRAMES,
+    AudioStream, Backends, DeviceInfo, Direction, ErrorSink, InputProcessor, MAX_BLOCK_FRAMES,
     OutputProcessor, StreamRequest,
 };
 use ringbuf::{
@@ -328,17 +328,54 @@ pub struct LooperStreams {
     pub captured: HeapCons<f32>,
 }
 
-/// The device named in `settings`, if any backend has one by that name.
+/// One end of the pair `settings` names.
 ///
-/// Matching by name alone is what the config file can express today; the
-/// backend it came from is whichever one claims it. Once a config stores
-/// the backend too, this becomes a lookup rather than a search.
-pub fn find_device(backends: &Backends, name: &str) -> Result<DeviceInfo, String> {
-    backends
+/// The direction is part of the lookup, not decoration: an interface's
+/// capture and render halves can arrive under the *same* name, so a
+/// search by name alone finds whichever the backend happened to list
+/// first - and a render endpoint asked to capture records the speakers
+/// rather than failing.
+pub fn find_device(
+    backends: &Backends,
+    backend: &str,
+    name: &str,
+    wanted: Direction,
+) -> Result<DeviceInfo, String> {
+    let backend = backends
+        .by_name(backend)
+        .ok_or_else(|| format!("audio backend '{backend}' is not available"))?;
+    backend
         .devices()
+        .map_err(|e| e.to_string())?
         .into_iter()
-        .find(|device| device.id.name == name && device.direction.can_capture())
+        .find(|device| {
+            device.id.name == name
+                && match wanted {
+                    Direction::Output => device.direction.can_play(),
+                    _ => device.direction.can_capture(),
+                }
+        })
         .ok_or_else(|| format!("audio device '{name}' not found"))
+}
+
+/// Both ends. On a duplex backend they are the same device.
+pub fn resolve_devices(
+    backends: &Backends,
+    settings: &AppConfig,
+) -> Result<(DeviceInfo, DeviceInfo), String> {
+    let input = find_device(
+        backends,
+        &settings.backend,
+        &settings.device_name,
+        Direction::Input,
+    )?;
+    let output = find_device(
+        backends,
+        &settings.backend,
+        settings.output_device(),
+        Direction::Output,
+    )?;
+    Ok((input, output))
 }
 
 /// Opens the device named in `settings` and starts the looper on it.
@@ -356,10 +393,10 @@ pub fn build_looper_streams(
     restored: &[Vec<f32>],
     on_error: ErrorSink,
 ) -> Result<LooperStreams, String> {
-    let device = find_device(backends, &settings.device_name)?.id;
+    let (input, output) = resolve_devices(backends, settings)?;
     let request = StreamRequest {
-        input: device.clone(),
-        output: device,
+        input: input.id,
+        output: output.id,
         sample_rate: settings.sample_rate,
     };
     let open = backends.open(&request).map_err(|e| e.to_string())?;

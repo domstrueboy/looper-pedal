@@ -32,11 +32,35 @@ struct Shared {
     starts: usize,
 }
 
+/// How a backend presents an interface.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// One device, both directions - ASIO.
+    Duplex,
+    /// Two devices under the same name, one each way, with rate lists
+    /// that don't match - WASAPI.
+    Split,
+}
+
 /// A mock backend, and the handle that pretends to be its driver. Both
 /// refer to the same stream, so starting one is visible from the other.
 pub fn mock() -> (MockBackend, MockDriver) {
     mock_with(1, 1)
 }
+
+/// A backend shaped the way WASAPI is: the interface's capture and
+/// render halves arrive as separate devices sharing a name, and only the
+/// capture end is honest about its rates - the render end claims a range
+/// it would have to resample to reach.
+pub fn split() -> (MockBackend, MockDriver) {
+    let (mut backend, driver) = mock_with(2, 2);
+    backend.shape = Shape::Split;
+    (backend, driver)
+}
+
+/// The only rate a split backend's capture end will take: its own mix
+/// rate, whatever its render half advertises.
+pub const SPLIT_CAPTURE_RATE: u32 = 44_100;
 
 /// The same, with the channel counts a test wants. The device reports
 /// them as one duplex device, the way ASIO does.
@@ -47,6 +71,7 @@ pub fn mock_with(input_channels: u16, output_channels: u16) -> (MockBackend, Moc
         input_channels,
         output_channels,
         granted_rate: None,
+        shape: Shape::Duplex,
     };
     let driver = MockDriver {
         shared,
@@ -61,6 +86,7 @@ pub struct MockBackend {
     input_channels: u16,
     output_channels: u16,
     granted_rate: Option<u32>,
+    shape: Shape,
 }
 
 impl MockBackend {
@@ -87,10 +113,19 @@ impl AudioBackend for MockBackend {
     }
 
     fn devices(&self) -> HalResult<Vec<DeviceInfo>> {
-        Ok(vec![DeviceInfo {
-            id: Self::device_id(),
-            direction: Direction::Duplex,
-        }])
+        let directions: &[Direction] = match self.shape {
+            Shape::Duplex => &[Direction::Duplex],
+            // Same name both times, which is the trap: a lookup by name
+            // alone finds whichever comes first.
+            Shape::Split => &[Direction::Output, Direction::Input],
+        };
+        Ok(directions
+            .iter()
+            .map(|&direction| DeviceInfo {
+                id: Self::device_id(),
+                direction,
+            })
+            .collect())
     }
 
     fn caps(&self, device: &DeviceInfo) -> HalResult<DeviceCaps> {
@@ -100,10 +135,22 @@ impl AudioBackend for MockBackend {
                 device: device.id.name.clone(),
             });
         }
-        Ok(DeviceCaps {
-            sample_rates: CANDIDATE_SAMPLE_RATES.to_vec(),
-            input_channels: self.input_channels,
-            output_channels: self.output_channels,
+        Ok(match (self.shape, device.direction) {
+            (Shape::Split, Direction::Input) => DeviceCaps {
+                sample_rates: vec![SPLIT_CAPTURE_RATE],
+                input_channels: self.input_channels,
+                output_channels: 0,
+            },
+            (Shape::Split, _) => DeviceCaps {
+                sample_rates: CANDIDATE_SAMPLE_RATES.to_vec(),
+                input_channels: 0,
+                output_channels: self.output_channels,
+            },
+            _ => DeviceCaps {
+                sample_rates: CANDIDATE_SAMPLE_RATES.to_vec(),
+                input_channels: self.input_channels,
+                output_channels: self.output_channels,
+            },
         })
     }
 

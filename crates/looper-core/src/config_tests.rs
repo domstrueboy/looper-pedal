@@ -4,6 +4,8 @@ fn saved() -> AppConfig {
     AppConfig {
         device_name: "Audient USB Audio ASIO Driver".to_string(),
         sample_rate: 48_000,
+        backend: "asio".to_string(),
+        output_device_name: None,
         input_channel: 1,
         volume_pct: 140,
         preroll_ms: 2_500,
@@ -149,4 +151,67 @@ fn saving_creates_the_directory_it_needs() {
 fn a_file_that_is_not_there_is_no_config() {
     let path = temp_dir("config-absent").join("config.toml");
     assert!(AppConfig::load_from(&path).is_none());
+}
+
+// --- Reading a file an older build wrote ----------------------------
+
+/// Exactly what v0.1.5 saved: no backend, no output device, because
+/// there was only ever one of each.
+const BEFORE_BACKENDS: &str = r#"
+device_name = "Audient USB Audio ASIO Driver"
+sample_rate = 48000
+input_channel = 1
+volume_pct = 140
+preroll_ms = 2500
+latency_ms = 12
+max_loop_secs = 90
+max_layers = 6
+long_press_ms = 2000
+"#;
+
+#[test]
+fn a_config_from_before_backends_still_loads() {
+    let read = AppConfig::from_toml(BEFORE_BACKENDS).expect("parses");
+
+    // Every such file came from a build that could only open ASIO, so
+    // that is what it meant - anything else would move the user's device
+    // out from under them on upgrade.
+    assert_eq!(read.backend, "asio");
+    assert_eq!(read.device_name, "Audient USB Audio ASIO Driver");
+    assert_eq!(read.sample_rate, 48_000);
+    assert_eq!(read.input_channel, 1);
+    assert_eq!(read.volume_pct, 140, "the settings around it survive too");
+}
+
+#[test]
+fn one_device_name_means_both_ends() {
+    let read = AppConfig::from_toml(BEFORE_BACKENDS).expect("parses");
+
+    // ASIO opens one device both ways, so an absent output device is
+    // not missing information - it is the same device.
+    assert_eq!(read.output_device_name, None);
+    assert_eq!(read.output_device(), "Audient USB Audio ASIO Driver");
+}
+
+#[test]
+fn a_split_pair_keeps_both_names() {
+    let split = AppConfig {
+        backend: "wasapi".to_string(),
+        device_name: "Analogue 1/2 (Audient iD4)".to_string(),
+        output_device_name: Some("Speakers".to_string()),
+        ..saved()
+    };
+
+    let read = AppConfig::from_toml(&split.to_toml().expect("serializes")).expect("parses");
+    assert_eq!(read.backend, "wasapi");
+    assert_eq!(read.device_name, "Analogue 1/2 (Audient iD4)");
+    assert_eq!(read.output_device(), "Speakers");
+}
+
+#[test]
+fn a_fresh_config_has_no_backend_chosen_yet() {
+    // Unlike the serde default, which answers "what did an older file
+    // mean". Nothing is chosen here, and the settings screen picks from
+    // whatever this machine has - which may not include ASIO at all.
+    assert!(AppConfig::default().backend.is_empty());
 }

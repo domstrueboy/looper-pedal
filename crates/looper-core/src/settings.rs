@@ -1,13 +1,30 @@
-use looper_hal::Backends;
+use looper_hal::{Backends, DeviceInfo, Direction};
 
 use crate::audio::engine;
 use crate::config::AppConfig;
 
+/// A backend as the picker shows it: what to store, and what to read.
+pub struct BackendChoice {
+    pub id: String,
+    pub label: String,
+}
+
 /// State behind the settings screen: what there is to choose from, and
 /// the choice itself. Rendered by the UI crate's settings screen.
 pub struct SettingsState {
-    /// Per-device, so they're re-queried whenever the device changes.
-    pub devices: Vec<String>,
+    pub backends: Vec<BackendChoice>,
+    /// Devices of the chosen backend that can capture.
+    pub inputs: Vec<String>,
+    /// Those that can play. The same list as `inputs` on a backend whose
+    /// devices do both.
+    pub outputs: Vec<String>,
+    /// Whether the chosen input device plays as well as captures. False
+    /// means the output has to be picked separately.
+    pub duplex: bool,
+    /// Rates both ends will take, which is not always either one's own
+    /// list: a shared-mode capture endpoint offers only its own mix rate
+    /// while its render half claims a range it would have to resample to
+    /// reach.
     pub sample_rates: Vec<u32>,
     pub input_channels: u16,
     /// The choice, already in the shape it will be started and saved in.
@@ -27,7 +44,10 @@ impl SettingsState {
     /// put in its place.
     pub fn new(error: Option<String>) -> Self {
         Self {
-            devices: Vec::new(),
+            backends: Vec::new(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            duplex: true,
             sample_rates: Vec::new(),
             input_channels: 0,
             config: AppConfig::load().unwrap_or_default(),
@@ -38,19 +58,39 @@ impl SettingsState {
     /// Asks what there is, and pre-selects whatever is saved, so
     /// reopening settings doesn't reset every list to the top.
     pub fn refresh(&mut self, backends: &Backends) {
-        self.devices = backends
-            .devices()
-            .into_iter()
-            // A device that can only play is no use: the looper has to
-            // record from whatever it opens.
-            .filter(|device| device.direction.can_capture())
-            .map(|device| device.id.name)
+        self.backends = backends
+            .iter()
+            .map(|backend| BackendChoice {
+                id: backend.id().as_str().to_string(),
+                label: backend.label().to_string(),
+            })
             .collect();
 
-        // A saved device that isn't plugged in now falls back to the
-        // first one there is, rather than leaving a name nothing matches.
-        if !self.devices.contains(&self.config.device_name) {
-            self.config.device_name = self.devices.first().cloned().unwrap_or_default();
+        // A saved backend this build doesn't have - an ASIO config
+        // carried to a machine with no driver - falls back rather than
+        // leaving a name nothing matches.
+        if !self.backends.iter().any(|b| b.id == self.config.backend) {
+            self.config.backend = self
+                .backends
+                .first()
+                .map(|b| b.id.clone())
+                .unwrap_or_default();
+        }
+        self.refresh_for_selected_backend(backends);
+    }
+
+    /// Device lists are per-backend, so changing backend re-queries them.
+    pub fn refresh_for_selected_backend(&mut self, backends: &Backends) {
+        let devices = backends
+            .by_name(&self.config.backend)
+            .and_then(|backend| backend.devices().ok())
+            .unwrap_or_default();
+
+        self.inputs = names(&devices, Direction::Input);
+        self.outputs = names(&devices, Direction::Output);
+
+        if !self.inputs.contains(&self.config.device_name) {
+            self.config.device_name = self.inputs.first().cloned().unwrap_or_default();
         }
         self.refresh_for_selected_device(backends);
     }
@@ -60,16 +100,56 @@ impl SettingsState {
     /// selection it does offer is kept - switching devices shouldn't
     /// silently move a rate that both of them support.
     pub fn refresh_for_selected_device(&mut self, backends: &Backends) {
-        let caps = engine::find_device(backends, &self.config.device_name)
-            .ok()
-            .and_then(|device| backends.get(device.id.backend)?.caps(&device).ok());
+        let input = engine::find_device(
+            backends,
+            &self.config.backend,
+            &self.config.device_name,
+            Direction::Input,
+        )
+        .ok();
+        self.duplex = input
+            .as_ref()
+            .is_some_and(|device| device.direction == Direction::Duplex);
 
-        (self.sample_rates, self.input_channels) = match caps {
-            // Falls back to empty rather than surfacing the error: a
-            // device that answers neither can't be started, and the
-            // screen says so from the empty lists themselves.
-            Some(caps) => (caps.sample_rates, caps.input_channels),
-            None => (Vec::new(), 0),
+        // One device does both, so there is nothing to choose and
+        // nothing to store.
+        if self.duplex {
+            self.config.output_device_name = None;
+        } else if !self
+            .outputs
+            .contains(&self.config.output_device().to_string())
+        {
+            self.config.output_device_name = self.outputs.first().cloned();
+        }
+
+        let output = engine::find_device(
+            backends,
+            &self.config.backend,
+            self.config.output_device(),
+            Direction::Output,
+        )
+        .ok();
+
+        // Falls back to empty rather than surfacing the error: a device
+        // that answers neither can't be started, and the screen says so
+        // from the empty lists themselves.
+        let caps = |device: &Option<DeviceInfo>| {
+            device
+                .as_ref()
+                .and_then(|device| backends.get(device.id.backend)?.caps(device).ok())
+        };
+        let input_caps = caps(&input);
+        let output_caps = caps(&output);
+
+        self.input_channels = input_caps.as_ref().map(|c| c.input_channels).unwrap_or(0);
+        self.sample_rates = match (&input_caps, &output_caps) {
+            (Some(input), Some(output)) => input
+                .sample_rates
+                .iter()
+                .copied()
+                .filter(|rate| output.sample_rates.contains(rate))
+                .collect(),
+            _ => Vec::new(),
         };
 
         if !self.sample_rates.contains(&self.config.sample_rate) {
@@ -80,3 +160,18 @@ impl SettingsState {
         }
     }
 }
+
+fn names(devices: &[DeviceInfo], wanted: Direction) -> Vec<String> {
+    devices
+        .iter()
+        .filter(|device| match wanted {
+            Direction::Output => device.direction.can_play(),
+            _ => device.direction.can_capture(),
+        })
+        .map(|device| device.id.name.clone())
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod tests;

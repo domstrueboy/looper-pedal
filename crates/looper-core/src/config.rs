@@ -48,8 +48,22 @@ const LOOP_DIR: &str = "loop";
 /// config at all.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// The input device, and on a duplex backend the output one too.
+    /// Named as it always was, so files written before there were two
+    /// still load.
     pub device_name: String,
     pub sample_rate: u32,
+    /// Which backend `device_name` belongs to. A name alone doesn't
+    /// identify a device once there is more than one backend - WASAPI
+    /// and ASIO both present the same interface under names of their
+    /// own.
+    #[serde(default = "default_backend")]
+    pub backend: String,
+    /// The output device, when it isn't the input one. `None` covers
+    /// every duplex backend, and every config written before backends
+    /// that split them existed.
+    #[serde(default)]
+    pub output_device_name: Option<String>,
     /// 0-indexed input channel to capture/record/loop.
     #[serde(default)]
     pub input_channel: u16,
@@ -73,6 +87,12 @@ pub struct AppConfig {
     /// See `LONG_PRESS_MS_RANGE`.
     #[serde(default = "default_long_press_ms")]
     pub long_press_ms: u32,
+}
+
+/// What a config written before this field existed meant: those files
+/// all came from a build that could only open ASIO.
+fn default_backend() -> String {
+    "asio".to_string()
 }
 
 fn default_volume_pct() -> u32 {
@@ -108,6 +128,14 @@ impl AppConfig {
 
     pub fn save(&self) -> Result<(), String> {
         self.save_to(&config_path())
+    }
+
+    /// The output device, which is the input one unless a backend that
+    /// splits them says otherwise.
+    pub fn output_device(&self) -> &str {
+        self.output_device_name
+            .as_deref()
+            .unwrap_or(&self.device_name)
     }
 
     /// Where `load` actually reads from. Split out so the file half can
@@ -176,6 +204,13 @@ impl Default for AppConfig {
         Self {
             device_name: String::new(),
             sample_rate: 0,
+            // Empty rather than `default_backend`'s "asio", for the same
+            // reason `device_name` is: nothing is chosen yet, and the
+            // settings screen picks from what this machine actually has.
+            // The serde default is about reading an older file, which is
+            // a different question.
+            backend: String::new(),
+            output_device_name: None,
             input_channel: 0,
             volume_pct: DEFAULT_VOLUME_PCT,
             preroll_ms: DEFAULT_PREROLL_MS,

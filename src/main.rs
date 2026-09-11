@@ -10,6 +10,7 @@ mod input;
 mod loop_mirror;
 mod looper;
 mod preroll;
+mod sample;
 mod settings;
 mod state_machine;
 mod ui;

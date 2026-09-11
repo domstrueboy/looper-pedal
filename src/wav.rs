@@ -5,6 +5,8 @@
 
 use std::path::Path;
 
+use crate::sample;
+
 const HEADER_BYTES: u32 = 36;
 const FMT_CHUNK_BYTES: u32 = 16;
 const PCM: u16 = 1;
@@ -12,18 +14,22 @@ const MONO: u16 = 1;
 const BITS: u16 = 32;
 const BYTES_PER_SAMPLE: u32 = BITS as u32 / 8;
 
-pub fn write(path: &Path, samples: &[i32], sample_rate: u32) -> Result<(), String> {
+pub fn write(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
     std::fs::write(path, encode(samples, sample_rate))
         .map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
 /// The samples and the rate they were recorded at, or `None` if this
 /// isn't a mono 32-bit PCM WAV.
-pub fn read(path: &Path) -> Option<(Vec<i32>, u32)> {
+///
+/// The file stays 32-bit integer while the core works in f32, so loops
+/// saved by earlier builds still load and any audio editor can still
+/// open one - the conversion happens here, at the edge.
+pub fn read(path: &Path) -> Option<(Vec<f32>, u32)> {
     decode(&std::fs::read(path).ok()?)
 }
 
-fn encode(samples: &[i32], sample_rate: u32) -> Vec<u8> {
+fn encode(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     let data_bytes = samples.len() as u32 * BYTES_PER_SAMPLE;
     let mut wav = Vec::with_capacity((HEADER_BYTES + 8 + data_bytes) as usize);
 
@@ -42,13 +48,13 @@ fn encode(samples: &[i32], sample_rate: u32) -> Vec<u8> {
 
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&data_bytes.to_le_bytes());
-    for sample in samples {
-        wav.extend_from_slice(&sample.to_le_bytes());
+    for &sample in samples {
+        wav.extend_from_slice(&sample::to_pcm32(sample).to_le_bytes());
     }
     wav
 }
 
-fn decode(bytes: &[u8]) -> Option<(Vec<i32>, u32)> {
+fn decode(bytes: &[u8]) -> Option<(Vec<f32>, u32)> {
     if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return None;
     }
@@ -80,7 +86,7 @@ fn decode(bytes: &[u8]) -> Option<(Vec<i32>, u32)> {
             b"data" => {
                 samples = Some(
                     body.chunks_exact(BYTES_PER_SAMPLE as usize)
-                        .map(|s| i32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+                        .map(|s| sample::from_pcm32(i32::from_le_bytes([s[0], s[1], s[2], s[3]])))
                         .collect(),
                 );
             }

@@ -16,7 +16,7 @@ const MAX_SAVED_LAYERS: usize = 16;
 /// position zero.
 struct Take {
     start: usize,
-    samples: Vec<i32>,
+    samples: Vec<f32>,
 }
 
 /// The UI thread's own copy of the recorded loop, kept so it can be
@@ -28,9 +28,9 @@ struct Take {
 /// played, only laid out into layers when saving. So this costs about
 /// what was actually recorded rather than a second full-size stack.
 pub struct LoopMirror {
-    captured: HeapCons<i32>,
+    captured: HeapCons<f32>,
     previous_state: LoopState,
-    open_take: Option<Vec<i32>>,
+    open_take: Option<Vec<f32>>,
     finished: Vec<Take>,
     /// Taken from the audio thread's telemetry rather than from how many
     /// samples arrived here, a frame after a take ends - see `tick`.
@@ -46,7 +46,7 @@ pub struct LoopMirror {
 }
 
 impl LoopMirror {
-    pub fn new(captured: HeapCons<i32>, sample_rate: u32, restored: Vec<Vec<i32>>) -> Self {
+    pub fn new(captured: HeapCons<f32>, sample_rate: u32, restored: Vec<Vec<f32>>) -> Self {
         let loop_len = restored.first().map(Vec::len).unwrap_or(0);
         Self {
             captured,
@@ -80,7 +80,7 @@ impl LoopMirror {
         // still land in the take that is ending. Anything arriving with
         // no take open belongs to one that has already finished, and is
         // dropped rather than corrupting the next.
-        let mut scratch = [0i32; 4096];
+        let mut scratch = [0.0f32; 4096];
         loop {
             let n = self.captured.pop_slice(&mut scratch);
             if n == 0 {
@@ -178,7 +178,7 @@ impl LoopMirror {
     }
 
     /// Every take laid out as a layer, in order.
-    fn layers(&self) -> Vec<Vec<i32>> {
+    fn layers(&self) -> Vec<Vec<f32>> {
         self.finished.iter().map(|take| self.layer(take)).collect()
     }
 
@@ -188,8 +188,8 @@ impl LoopMirror {
     /// The first pass over a position replaces what's there and later
     /// passes sum into it - the same rule the layer stack applies while
     /// overdubbing, so a loop plays back the way it sounded.
-    fn layer(&self, take: &Take) -> Vec<i32> {
-        let mut layer = vec![0i32; self.loop_len];
+    fn layer(&self, take: &Take) -> Vec<f32> {
+        let mut layer = vec![0.0f32; self.loop_len];
         if self.loop_len == 0 {
             return layer;
         }
@@ -199,7 +199,7 @@ impl LoopMirror {
             layer[at] = if i < self.loop_len {
                 sample
             } else {
-                layer[at].saturating_add(sample)
+                layer[at] + sample
             };
         }
         layer
@@ -218,8 +218,8 @@ impl LoopMirror {
 /// is longer than `max_loop_secs` now allows. Layers past `max_layers`
 /// are dropped individually instead - they're independent takes, so the
 /// ones underneath are still exactly what was played.
-pub fn load(directory: &Path, settings: &AppConfig) -> Vec<Vec<i32>> {
-    let mut layers: Vec<Vec<i32>> = Vec::new();
+pub fn load(directory: &Path, settings: &AppConfig) -> Vec<Vec<f32>> {
+    let mut layers: Vec<Vec<f32>> = Vec::new();
 
     for index in 0..MAX_SAVED_LAYERS {
         let Some((samples, rate)) = wav::read(&layer_path(directory, index)) else {

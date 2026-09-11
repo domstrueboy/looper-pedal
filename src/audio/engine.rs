@@ -9,6 +9,7 @@ use ringbuf::{
 use super::loop_stack::LoopStack;
 use super::shared_control::SharedControl;
 use crate::config::AppConfig;
+use crate::sample;
 use crate::state_machine::LoopState;
 
 /// Bounds one callback's worth of work at a fixed size, so the scratch
@@ -141,7 +142,7 @@ pub struct LooperStreams {
     pub input: cpal::Stream,
     pub output: cpal::Stream,
     pub sample_rate: u32,
-    pub captured: HeapCons<i32>,
+    pub captured: HeapCons<f32>,
 }
 
 /// Holds the recorded signal back to where the monitored one is.
@@ -159,20 +160,20 @@ pub struct LooperStreams {
 /// point - which is audio from before the take opened.
 struct MonitorDelay {
     /// The last `frames` samples, oldest at `at`. Empty means no delay.
-    buffer: Vec<i32>,
+    buffer: Vec<f32>,
     at: usize,
 }
 
 impl MonitorDelay {
     fn new(frames: usize) -> Self {
         Self {
-            buffer: vec![0; frames],
+            buffer: vec![0.0; frames],
             at: 0,
         }
     }
 
     /// Replaces every sample with the one `frames` earlier, in place.
-    fn apply(&mut self, samples: &mut [i32]) {
+    fn apply(&mut self, samples: &mut [f32]) {
         if self.buffer.is_empty() {
             return;
         }
@@ -196,15 +197,15 @@ struct InputPath {
     control: Arc<SharedControl>,
     channels: u16,
     input_channel: u16,
-    scratch: Vec<i32>,
+    scratch: Vec<f32>,
     delay: MonitorDelay,
-    passthrough: HeapProd<i32>,
-    recorder: HeapProd<i32>,
-    capture: HeapProd<i32>,
+    passthrough: HeapProd<f32>,
+    recorder: HeapProd<f32>,
+    capture: HeapProd<f32>,
 }
 
 impl InputPath {
-    fn process(&mut self, data: &[i32]) {
+    fn process(&mut self, data: &[f32]) {
         // Bound each chunk to the fixed-size scratch buffer whatever the
         // driver hands us: overrunning it would panic inside a real-time
         // callback. Never happens in practice, but cheap.
@@ -248,11 +249,11 @@ impl InputPath {
 struct OutputPath {
     control: Arc<SharedControl>,
     channels: u16,
-    dry: Vec<i32>,
-    loop_out: Vec<i32>,
-    recorded: Vec<i32>,
-    passthrough: HeapCons<i32>,
-    recorder: HeapCons<i32>,
+    dry: Vec<f32>,
+    loop_out: Vec<f32>,
+    recorded: Vec<f32>,
+    passthrough: HeapCons<f32>,
+    recorder: HeapCons<f32>,
     stack: LoopStack,
     /// The callback only ever sees the published state, never the
     /// transitions, so layer bookkeeping keys off this changing - see
@@ -261,7 +262,7 @@ struct OutputPath {
 }
 
 impl OutputPath {
-    fn process(&mut self, data: &mut [i32]) {
+    fn process(&mut self, data: &mut [f32]) {
         // Same chunk-bounding as the input path.
         for out in data.chunks_mut(SCRATCH_CAPACITY * self.channels as usize) {
             let frames = out.len() / self.channels as usize;
@@ -271,7 +272,7 @@ impl OutputPath {
             // so it is the input that fell behind.
             let read = self.passthrough.pop_slice(dry);
             if read < frames {
-                dry[read..].fill(0);
+                dry[read..].fill(0.0);
                 self.control.note_input_underrun();
             }
 
@@ -303,7 +304,7 @@ impl OutputPath {
                         // A short read means the input fell behind;
                         // record the gap as silence rather than
                         // shifting everything after it out of time.
-                        recorded[n..].fill(0);
+                        recorded[n..].fill(0.0);
                         let gain = self.control.volume_pct();
                         self.stack.read_mixed_with_overdub(loop_out, recorded, gain);
                     } else {
@@ -342,8 +343,8 @@ fn build_audio_path(
     settings: &AppConfig,
     sample_rate: u32,
     channels: u16,
-    restored: &[Vec<i32>],
-) -> (AudioPath, HeapCons<i32>) {
+    restored: &[Vec<f32>],
+) -> (AudioPath, HeapCons<f32>) {
     // Headroom between the callbacks, to absorb their jitter. It delays
     // the monitored signal by that much as a side effect, which is why
     // the recorded signal is held back to match - see `MonitorDelay`.
@@ -361,19 +362,19 @@ fn build_audio_path(
 
     // Dry passthrough bridge. The prefill, not the capacity, is what
     // sets the monitoring delay.
-    let (mut passthrough_tx, passthrough_rx) = HeapRb::<i32>::new(ring_capacity).split();
+    let (mut passthrough_tx, passthrough_rx) = HeapRb::<f32>::new(ring_capacity).split();
     for _ in 0..latency_frames {
-        passthrough_tx.try_push(0).unwrap();
+        passthrough_tx.try_push(0.0).unwrap();
     }
 
     // Feeds captured samples to the output path, which owns the layer
     // stack.
-    let (recorder_tx, recorder_rx) = HeapRb::<i32>::new(ring_capacity).split();
+    let (recorder_tx, recorder_rx) = HeapRb::<f32>::new(ring_capacity).split();
 
     // The same samples again, for the copy the UI thread keeps so that
     // the loop can be saved.
     let (capture_tx, capture_rx) =
-        HeapRb::<i32>::new(CAPTURE_BUFFER_SECONDS * sample_rate as usize).split();
+        HeapRb::<f32>::new(CAPTURE_BUFFER_SECONDS * sample_rate as usize).split();
 
     let loop_capacity = settings.max_loop_secs as usize * sample_rate as usize;
     let mut stack = LoopStack::new(loop_capacity, settings.max_layers as usize);
@@ -390,7 +391,7 @@ fn build_audio_path(
             control: Arc::clone(control),
             channels,
             input_channel: settings.input_channel,
-            scratch: vec![0i32; SCRATCH_CAPACITY],
+            scratch: vec![0.0f32; SCRATCH_CAPACITY],
             delay: MonitorDelay::new(latency_frames),
             passthrough: passthrough_tx,
             recorder: recorder_tx,
@@ -399,9 +400,9 @@ fn build_audio_path(
         output: OutputPath {
             control: Arc::clone(control),
             channels,
-            dry: vec![0i32; SCRATCH_CAPACITY],
-            loop_out: vec![0i32; SCRATCH_CAPACITY],
-            recorded: vec![0i32; SCRATCH_CAPACITY],
+            dry: vec![0.0f32; SCRATCH_CAPACITY],
+            loop_out: vec![0.0f32; SCRATCH_CAPACITY],
+            recorded: vec![0.0f32; SCRATCH_CAPACITY],
             passthrough: passthrough_rx,
             recorder: recorder_rx,
             stack,
@@ -421,7 +422,7 @@ fn build_audio_path(
 pub fn build_looper_streams(
     control: Arc<SharedControl>,
     settings: &AppConfig,
-    restored: &[Vec<i32>],
+    restored: &[Vec<f32>],
 ) -> Result<LooperStreams, String> {
     let (device, config) = open_device_and_config(&settings.device_name, settings.sample_rate)?;
     let sample_rate = config.sample_rate;
@@ -439,10 +440,27 @@ pub fn build_looper_streams(
         mut output,
     } = path;
 
+    // The audio path works in f32; this device is i32 (asserted above).
+    // Converting here, either side of the callback, is what keeps the
+    // format assumption at the edge instead of threaded through the path
+    // - and it's the job the hardware layer takes over when the backends
+    // land, at which point a device that isn't i32 becomes openable.
+    let block = SCRATCH_CAPACITY * channels as usize;
+    let mut input_scratch = vec![0.0f32; block];
+    let mut output_scratch = vec![0.0f32; block];
+
     let input_stream = device
         .build_input_stream(
             config.clone(),
-            move |data: &[i32], _: &cpal::InputCallbackInfo| input.process(data),
+            move |data: &[i32], _: &cpal::InputCallbackInfo| {
+                for chunk in data.chunks(block) {
+                    let converted = &mut input_scratch[..chunk.len()];
+                    for (slot, &raw) in converted.iter_mut().zip(chunk) {
+                        *slot = sample::from_pcm32(raw);
+                    }
+                    input.process(converted);
+                }
+            },
             stream_err_fn,
             None,
         )
@@ -451,7 +469,15 @@ pub fn build_looper_streams(
     let output_stream = device
         .build_output_stream(
             config,
-            move |data: &mut [i32], _: &cpal::OutputCallbackInfo| output.process(data),
+            move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
+                for chunk in data.chunks_mut(block) {
+                    let rendered = &mut output_scratch[..chunk.len()];
+                    output.process(rendered);
+                    for (slot, &value) in chunk.iter_mut().zip(rendered.iter()) {
+                        *slot = sample::to_pcm32(value);
+                    }
+                }
+            },
             stream_err_fn,
             None,
         )
@@ -504,17 +530,18 @@ fn stream_err_fn(err: cpal::Error) {
     eprintln!("stream error: {err}");
 }
 
-/// Adds `loop_signal` onto `dry` in place, saturating so a loud loop can't
-/// wrap the live signal into its opposite sign.
-fn mix_add(dry: &mut [i32], loop_signal: &[i32]) {
+/// Adds `loop_signal` onto `dry` in place. Not clamped - the sum can run
+/// past full scale and is brought back once, at the conversion out to the
+/// device, so the volume control can still rescue a hot loop.
+fn mix_add(dry: &mut [f32], loop_signal: &[f32]) {
     for (d, l) in dry.iter_mut().zip(loop_signal.iter()) {
-        *d = d.saturating_add(*l);
+        *d += *l;
     }
 }
 
 /// Duplicates mono across every output channel, so a single input is
 /// centered rather than coming out one side only.
-fn duplicate_mono_to_channels(mono: &[i32], channels: u16, out: &mut [i32]) {
+fn duplicate_mono_to_channels(mono: &[f32], channels: u16, out: &mut [f32]) {
     for (frame_out, &sample) in out.chunks_exact_mut(channels as usize).zip(mono.iter()) {
         frame_out.fill(sample);
     }

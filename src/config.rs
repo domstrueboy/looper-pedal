@@ -156,7 +156,7 @@ impl AppConfig {
         u64::from(self.max_loop_secs)
             * u64::from(self.max_layers)
             * u64::from(self.sample_rate)
-            * size_of::<i32>() as u64
+            * size_of::<f32>() as u64
     }
 
     fn to_toml(&self) -> Result<String, String> {

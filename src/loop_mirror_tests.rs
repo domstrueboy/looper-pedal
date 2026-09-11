@@ -13,12 +13,12 @@ const RATE: u32 = 44_100;
 /// which keeps them readable instead of megabyte-sized.
 const SLOW: u32 = 1;
 
-fn new_mirror() -> (HeapProd<i32>, LoopMirror) {
+fn new_mirror() -> (HeapProd<f32>, LoopMirror) {
     new_mirror_at(RATE)
 }
 
-fn new_mirror_at(sample_rate: u32) -> (HeapProd<i32>, LoopMirror) {
-    let (producer, consumer) = HeapRb::<i32>::new(1024).split();
+fn new_mirror_at(sample_rate: u32) -> (HeapProd<f32>, LoopMirror) {
+    let (producer, consumer) = HeapRb::<f32>::new(1024).split();
     (producer, LoopMirror::new(consumer, sample_rate, Vec::new()))
 }
 
@@ -35,10 +35,10 @@ fn settings(sample_rate: u32) -> AppConfig {
 /// input callback delivers samples, the state changes back. The extra
 /// tick is the frame on which the loop length settles.
 fn record(
-    input: &mut HeapProd<i32>,
+    input: &mut HeapProd<f32>,
     mirror: &mut LoopMirror,
     state: LoopState,
-    samples: &[i32],
+    samples: &[f32],
     loop_len: usize,
     take_start: usize,
 ) -> bool {
@@ -47,6 +47,16 @@ fn record(
     mirror.tick(state, loop_len, take_start);
     mirror.tick(LoopState::Looping, loop_len, take_start);
     mirror.tick(LoopState::Looping, loop_len, take_start)
+}
+
+/// Sample values, as small exact fractions.
+///
+/// A saved loop is written as 32-bit integers, so a value has to survive
+/// f32 -> i32 -> f32 unchanged, and has to sit inside +/-1.0 or saving
+/// would clip it. Sixty-fourths do both, and keep the tests reading in
+/// whole numbers rather than in decimals nobody can check by eye.
+fn s(values: &[i32]) -> Vec<f32> {
+    values.iter().map(|&v| v as f32 / 64.0).collect()
 }
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -63,14 +73,14 @@ fn a_first_take_becomes_the_only_layer() {
         &mut input,
         &mut mirror,
         LoopState::Recording,
-        &[1, 2, 3, 4],
+        &s(&[1, 2, 3, 4]),
         4,
         0,
     );
 
     assert!(out_of_date, "a new take needs saving");
     assert_eq!(mirror.layers().len(), 1);
-    assert_eq!(mirror.layers(), vec![vec![1, 2, 3, 4]]);
+    assert_eq!(mirror.layers(), vec![s(&[1, 2, 3, 4])]);
 }
 
 #[test]
@@ -80,7 +90,7 @@ fn an_overdub_lands_where_it_began() {
         &mut input,
         &mut mirror,
         LoopState::Recording,
-        &[1, 2, 3, 4],
+        &s(&[1, 2, 3, 4]),
         4,
         0,
     );
@@ -90,31 +100,31 @@ fn an_overdub_lands_where_it_began() {
         &mut input,
         &mut mirror,
         LoopState::Overdubbing,
-        &[9, 8],
+        &s(&[9, 8]),
         4,
         2,
     );
 
     assert_eq!(mirror.layers().len(), 2);
-    assert_eq!(mirror.layers()[1], vec![0, 0, 9, 8]);
+    assert_eq!(mirror.layers()[1], s(&[0, 0, 9, 8]));
 }
 
 #[test]
 fn a_second_pass_sums_into_the_same_layer() {
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[0; 4], 4, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &[0.0; 4], 4, 0);
 
     // Six samples over a four-sample loop: the last two come back round.
     record(
         &mut input,
         &mut mirror,
         LoopState::Overdubbing,
-        &[1, 1, 1, 1, 2, 2],
+        &s(&[1, 1, 1, 1, 2, 2]),
         4,
         0,
     );
 
-    assert_eq!(mirror.layers()[1], vec![3, 3, 1, 1]);
+    assert_eq!(mirror.layers()[1], s(&[3, 3, 1, 1]));
 }
 
 #[test]
@@ -122,8 +132,8 @@ fn a_laid_out_take_matches_what_the_layer_stack_plays() {
     // The audio thread writes overdubs sample by sample as it plays;
     // this lays the same take out in one go. The two rules are written
     // separately, so this is what keeps them honest.
-    let base = [10, 20, 30, 40];
-    let take = [1, 2, 3, 4, 5, 6];
+    let base = s(&[10, 20, 30, 40]);
+    let take = s(&[1, 2, 3, 4, 5, 6]);
     let start = 2;
 
     let mut stack = LoopStack::new(16, 4);
@@ -131,15 +141,15 @@ fn a_laid_out_take_matches_what_the_layer_stack_plays() {
     stack.record_first_layer(&base);
     stack.finish_first_layer();
 
-    let mut skipped = vec![0; start];
+    let mut skipped = vec![0.0; start];
     stack.read_mixed(&mut skipped, 100);
     stack.begin_overdub();
-    let mut heard = vec![0; take.len()];
+    let mut heard = vec![0.0; take.len()];
     stack.read_mixed_with_overdub(&mut heard, &take, 100);
     stack.finish_overdub();
 
     // The overdub ended back at the top of the loop.
-    let mut played = vec![0; base.len()];
+    let mut played = vec![0.0; base.len()];
     stack.read_mixed(&mut played, 100);
 
     let (mut input, mut mirror) = new_mirror();
@@ -161,7 +171,7 @@ fn a_laid_out_take_matches_what_the_layer_stack_plays() {
     );
 
     let mirrored = &mirror.layers()[1];
-    let summed: Vec<i32> = base
+    let summed: Vec<f32> = base
         .iter()
         .zip(mirrored)
         .map(|(base, layer)| base + layer)
@@ -172,12 +182,12 @@ fn a_laid_out_take_matches_what_the_layer_stack_plays() {
 #[test]
 fn recording_again_replaces_the_loop() {
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2]), 2, 0);
     record(
         &mut input,
         &mut mirror,
         LoopState::Overdubbing,
-        &[3, 4],
+        &s(&[3, 4]),
         2,
         0,
     );
@@ -187,24 +197,24 @@ fn recording_again_replaces_the_loop() {
         &mut input,
         &mut mirror,
         LoopState::Recording,
-        &[5, 6, 7],
+        &s(&[5, 6, 7]),
         3,
         0,
     );
 
     assert_eq!(mirror.layers().len(), 1);
-    assert_eq!(mirror.layers(), vec![vec![5, 6, 7]]);
+    assert_eq!(mirror.layers(), vec![s(&[5, 6, 7])]);
 }
 
 #[test]
 fn removing_and_clearing_follow_the_stack() {
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2]), 2, 0);
     record(
         &mut input,
         &mut mirror,
         LoopState::Overdubbing,
-        &[3, 4],
+        &s(&[3, 4]),
         2,
         0,
     );
@@ -220,21 +230,21 @@ fn removing_and_clearing_follow_the_stack() {
 #[test]
 fn samples_arriving_with_no_take_open_are_dropped() {
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2]), 2, 0);
 
     // Stragglers from the take that just ended.
-    input.push_slice(&[99, 99]);
+    input.push_slice(&s(&[99, 99]));
     mirror.tick(LoopState::Looping, 2, 0);
 
     record(
         &mut input,
         &mut mirror,
         LoopState::Overdubbing,
-        &[3, 4],
+        &s(&[3, 4]),
         2,
         0,
     );
-    assert_eq!(mirror.layers()[1], vec![3, 4], "no stragglers mixed in");
+    assert_eq!(mirror.layers()[1], s(&[3, 4]), "no stragglers mixed in");
 }
 
 #[test]
@@ -245,7 +255,7 @@ fn a_saved_loop_comes_back_layer_for_layer() {
         &mut input,
         &mut mirror,
         LoopState::Recording,
-        &[1, 2, 3],
+        &s(&[1, 2, 3]),
         3,
         0,
     );
@@ -253,7 +263,7 @@ fn a_saved_loop_comes_back_layer_for_layer() {
         &mut input,
         &mut mirror,
         LoopState::Overdubbing,
-        &[4, 5, 6],
+        &s(&[4, 5, 6]),
         3,
         0,
     );
@@ -261,7 +271,7 @@ fn a_saved_loop_comes_back_layer_for_layer() {
     mirror.save(&directory).expect("saves");
     let loaded = load(&directory, &settings(RATE));
 
-    assert_eq!(loaded, vec![vec![1, 2, 3], vec![4, 5, 6]]);
+    assert_eq!(loaded, vec![s(&[1, 2, 3]), s(&[4, 5, 6])]);
 
     delete(&directory);
     assert!(load(&directory, &settings(RATE)).is_empty(), "deleted");
@@ -272,7 +282,7 @@ fn a_saved_loop_comes_back_layer_for_layer() {
 fn a_loop_recorded_at_another_rate_is_not_loaded() {
     let directory = temp_dir("wrong-rate");
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2]), 2, 0);
     mirror.save(&directory).expect("saves");
 
     // No resampling, so a rate change means the loop is unusable.
@@ -286,7 +296,7 @@ fn a_loop_recorded_at_another_rate_is_not_loaded() {
 fn a_gap_in_what_arrived_stops_the_loop_being_saved() {
     let directory = temp_dir("lost");
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2]), 2, 0);
 
     mirror.note_lost_samples();
 
@@ -300,7 +310,7 @@ fn a_gap_in_what_arrived_stops_the_loop_being_saved() {
 fn a_fresh_loop_can_be_saved_again_after_a_gap() {
     let directory = temp_dir("lost-then-cleared");
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2]), 2, 0);
     mirror.note_lost_samples();
     assert!(mirror.save(&directory).is_err());
 
@@ -308,9 +318,9 @@ fn a_fresh_loop_can_be_saved_again_after_a_gap() {
     // nothing left for it to be right about. Latching it for the whole
     // session would quietly stop saving anything ever again.
     mirror.clear();
-    record(&mut input, &mut mirror, LoopState::Recording, &[3, 4], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[3, 4]), 2, 0);
     mirror.save(&directory).expect("a loop recorded since the gap saves");
-    assert_eq!(load(&directory, &settings(RATE)), vec![vec![3, 4]]);
+    assert_eq!(load(&directory, &settings(RATE)), vec![s(&[3, 4])]);
 
     let _ = std::fs::remove_dir_all(&directory);
 }
@@ -319,14 +329,14 @@ fn a_fresh_loop_can_be_saved_again_after_a_gap() {
 fn recording_over_a_lost_loop_makes_it_savable_again() {
     let directory = temp_dir("lost-then-rerecorded");
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2]), 2, 0);
     mirror.note_lost_samples();
 
     // No clear in between: a first take replaces the whole loop by
     // itself, so the gap no longer applies to anything held.
-    record(&mut input, &mut mirror, LoopState::Recording, &[5, 6, 7], 3, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[5, 6, 7]), 3, 0);
     mirror.save(&directory).expect("saves");
-    assert_eq!(load(&directory, &settings(RATE)), vec![vec![5, 6, 7]]);
+    assert_eq!(load(&directory, &settings(RATE)), vec![s(&[5, 6, 7])]);
 
     let _ = std::fs::remove_dir_all(&directory);
 }
@@ -335,7 +345,7 @@ fn recording_over_a_lost_loop_makes_it_savable_again() {
 fn a_loop_longer_than_the_setting_now_allows_is_not_loaded() {
     let directory = temp_dir("too-long");
     let (mut input, mut mirror) = new_mirror_at(SLOW);
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2, 3], 3, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2, 3]), 3, 0);
     mirror.save(&directory).expect("saves");
 
     let mut tightened = settings(SLOW);
@@ -355,9 +365,9 @@ fn a_loop_longer_than_the_setting_now_allows_is_not_loaded() {
 fn layers_past_the_setting_are_dropped_and_the_rest_still_load() {
     let directory = temp_dir("too-many");
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
-    record(&mut input, &mut mirror, LoopState::Overdubbing, &[3, 4], 2, 0);
-    record(&mut input, &mut mirror, LoopState::Overdubbing, &[5, 6], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2]), 2, 0);
+    record(&mut input, &mut mirror, LoopState::Overdubbing, &s(&[3, 4]), 2, 0);
+    record(&mut input, &mut mirror, LoopState::Overdubbing, &s(&[5, 6]), 2, 0);
     mirror.save(&directory).expect("saves");
 
     let mut fewer = settings(RATE);
@@ -366,7 +376,7 @@ fn layers_past_the_setting_are_dropped_and_the_rest_still_load() {
     // exactly what was played - only what no longer fits goes.
     assert_eq!(
         load(&directory, &fewer),
-        vec![vec![1, 2], vec![3, 4]],
+        vec![s(&[1, 2]), s(&[3, 4])],
         "the layers that still fit come back"
     );
 
@@ -377,7 +387,7 @@ fn layers_past_the_setting_are_dropped_and_the_rest_still_load() {
 fn a_first_take_that_captured_nothing_clears_the_saved_loop() {
     let directory = temp_dir("empty-retake");
     let (mut input, mut mirror) = new_mirror();
-    record(&mut input, &mut mirror, LoopState::Recording, &[1, 2], 2, 0);
+    record(&mut input, &mut mirror, LoopState::Recording, &s(&[1, 2]), 2, 0);
     mirror.save(&directory).expect("saves");
     assert_eq!(load(&directory, &settings(RATE)).len(), 1);
 

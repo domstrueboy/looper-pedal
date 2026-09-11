@@ -2,32 +2,36 @@ use super::*;
 
 #[test]
 fn mix_add_sums_dry_and_loop_signal() {
-    let mut dry = [10, 20, 30];
-    mix_add(&mut dry, &[1, 2, 3]);
-    assert_eq!(dry, [11, 22, 33]);
+    let mut dry = [10.0, 20.0, 30.0];
+    mix_add(&mut dry, &[1.0, 2.0, 3.0]);
+    assert_eq!(dry, [11.0, 22.0, 33.0]);
 }
 
 #[test]
-fn mix_add_saturates_instead_of_wrapping() {
-    let mut dry = [i32::MAX, i32::MIN];
-    mix_add(&mut dry, &[1, -1]);
-    assert_eq!(dry, [i32::MAX, i32::MIN]);
+fn mix_add_lets_the_sum_run_past_full_scale() {
+    // Deliberately not clamped here. A hot loop over a loud dry signal
+    // keeps its true value all the way to `sample::to_pcm32`, which is
+    // the only place that clips - so turning the volume down still
+    // rescues it rather than finding it already squared off.
+    let mut dry = [0.9, -0.9];
+    mix_add(&mut dry, &[0.8, -0.8]);
+    assert_eq!(dry, [1.7, -1.7]);
 }
 
 #[test]
 fn duplicate_mono_to_channels_fills_every_channel_with_the_same_sample() {
-    let mono = [1, 2, 3];
-    let mut out = [0; 6];
+    let mono = [1.0, 2.0, 3.0];
+    let mut out = [0.0; 6];
     duplicate_mono_to_channels(&mono, 2, &mut out);
-    assert_eq!(out, [1, 1, 2, 2, 3, 3]);
+    assert_eq!(out, [1.0, 1.0, 2.0, 2.0, 3.0, 3.0]);
 }
 
 #[test]
 fn duplicate_mono_to_channels_handles_mono_output() {
-    let mono = [5, 6];
-    let mut out = [0; 2];
+    let mono = [5.0, 6.0];
+    let mut out = [0.0; 2];
     duplicate_mono_to_channels(&mono, 1, &mut out);
-    assert_eq!(out, [5, 6]);
+    assert_eq!(out, [5.0, 6.0]);
 }
 
 // --- The audio path, driven without a device ---------------------------
@@ -55,18 +59,23 @@ fn test_settings() -> AppConfig {
 
 /// One buffer switch: the input callback, then the output one, the order
 /// the driver runs them in. Returns what the monitor put out.
-fn drive(path: &mut AudioPath, input: &[i32]) -> Vec<i32> {
+fn drive(path: &mut AudioPath, input: &[f32]) -> Vec<f32> {
     path.input.process(input);
-    let mut out = vec![0i32; input.len()];
+    let mut out = vec![0.0f32; input.len()];
     path.output.process(&mut out);
     out
 }
 
 /// The next block of a ramp whose sample values are their own index, so
 /// a value read anywhere says which input sample it came from.
-fn ramp(next: &mut i32) -> Vec<i32> {
-    let block: Vec<i32> = (*next..*next + BLOCK as i32).collect();
-    *next += BLOCK as i32;
+///
+/// Well outside the +/-1.0 an audio sample keeps to, on purpose: nothing
+/// in the path clamps, so the values arrive intact and an offset below
+/// reads directly in samples. Clipping happens at the device edge, which
+/// driving the path by hand deliberately bypasses.
+fn ramp(next: &mut f32) -> Vec<f32> {
+    let block: Vec<f32> = (0..BLOCK).map(|i| *next + i as f32).collect();
+    *next += BLOCK as f32;
     block
 }
 
@@ -77,7 +86,7 @@ fn ramp(next: &mut i32) -> Vec<i32> {
 /// The dry path is deliberately delayed by `latency_frames` to absorb
 /// jitter, so if the recorder isn't delayed with it, a take lands that
 /// far ahead of the beat it was played against - and again per layer.
-fn overdub_offset(latency_ms: u32) -> i32 {
+fn overdub_offset(latency_ms: u32) -> f32 {
     let settings = AppConfig {
         latency_ms,
         ..test_settings()
@@ -89,18 +98,18 @@ fn overdub_offset(latency_ms: u32) -> i32 {
     // contributes nothing to what comes back out.
     control.publish_state(LoopState::Idle);
     for _ in 0..CYCLES_PER_LOOP {
-        drive(&mut path, &[0i32; BLOCK]);
+        drive(&mut path, &[0.0f32; BLOCK]);
     }
     control.publish_state(LoopState::Recording);
     for _ in 0..CYCLES_PER_LOOP {
-        drive(&mut path, &[0i32; BLOCK]);
+        drive(&mut path, &[0.0f32; BLOCK]);
     }
 
     // A ramp from here on, for long enough to push the silence right
     // out of the monitoring delay before the take starts - whole loops
     // of it, so playback still ends up back at the top.
     let latency_frames = (settings.latency_ms as usize * TEST_RATE as usize) / 1_000;
-    let mut next = 1;
+    let mut next = 1.0;
     control.publish_state(LoopState::Looping);
     for _ in 0..(latency_frames / LOOP_LEN + 2) * CYCLES_PER_LOOP {
         drive(&mut path, &ramp(&mut next));
@@ -114,7 +123,7 @@ fn overdub_offset(latency_ms: u32) -> i32 {
     // One full overdub pass, noting where the loop was and what the
     // monitor put out on each callback.
     control.publish_state(LoopState::Overdubbing);
-    let mut heard = vec![0i32; LOOP_LEN];
+    let mut heard = vec![0.0f32; LOOP_LEN];
     for _ in 0..CYCLES_PER_LOOP {
         let at = path.output.stack.play_pos();
         let out = drive(&mut path, &ramp(&mut next));
@@ -125,10 +134,10 @@ fn overdub_offset(latency_ms: u32) -> i32 {
     // The take is still open, so it's the layer being recorded - which
     // `read_mixed` includes over the part already written. The layer
     // below is silent, so this reads back the take itself.
-    let mut stored = vec![0i32; LOOP_LEN];
+    let mut stored = vec![0.0f32; LOOP_LEN];
     path.output.stack.read_mixed(&mut stored, 100);
 
-    let offsets: Vec<i32> = stored
+    let offsets: Vec<f32> = stored
         .iter()
         .zip(&heard)
         .map(|(stored, heard)| stored - heard)
@@ -148,7 +157,7 @@ fn an_overdub_is_stored_where_it_was_heard() {
         let offset = overdub_offset(latency_ms);
         println!("latency {latency_ms} ms: overdub offset {offset}");
         assert_eq!(
-            offset, 0,
+            offset, 0.0,
             "at {latency_ms} ms a take lands {offset} samples from the beat it \
              was played against, and every further layer inherits it again"
         );
@@ -159,21 +168,21 @@ fn an_overdub_is_stored_where_it_was_heard() {
 fn the_monitor_delay_hands_back_what_went_in_that_many_samples_ago() {
     let mut delay = MonitorDelay::new(3);
 
-    let mut first = [1, 2, 3, 4];
+    let mut first = [1.0, 2.0, 3.0, 4.0];
     delay.apply(&mut first);
-    assert_eq!(first, [0, 0, 0, 1], "silence until the line fills");
+    assert_eq!(first, [0.0, 0.0, 0.0, 1.0], "silence until the line fills");
 
-    let mut second = [5, 6, 7, 8];
+    let mut second = [5.0, 6.0, 7.0, 8.0];
     delay.apply(&mut second);
-    assert_eq!(second, [2, 3, 4, 5]);
+    assert_eq!(second, [2.0, 3.0, 4.0, 5.0]);
 }
 
 #[test]
 fn no_delay_leaves_the_signal_alone() {
     let mut delay = MonitorDelay::new(0);
-    let mut samples = [1, 2, 3];
+    let mut samples = [1.0, 2.0, 3.0];
     delay.apply(&mut samples);
-    assert_eq!(samples, [1, 2, 3], "a zero-latency setting is not possible, but still");
+    assert_eq!(samples, [1.0, 2.0, 3.0], "a zero-latency setting is not possible, but still");
 }
 
 /// The layer stack and the UI thread's copy are laid out by two separate
@@ -186,16 +195,16 @@ fn the_recorder_and_the_mirror_are_fed_the_same_samples() {
     let (mut path, mut captured) = build_audio_path(&control, &settings, TEST_RATE, 1, &[]);
 
     control.publish_state(LoopState::Recording);
-    let mut next = 1;
+    let mut next = 1.0;
     // Only the input half, so nothing drains the recorder ring; two
     // blocks stay well inside it.
     for _ in 0..2 {
         path.input.process(&ramp(&mut next));
     }
 
-    let mut recorded = vec![0i32; BLOCK * 2];
+    let mut recorded = vec![0.0f32; BLOCK * 2];
     let n = path.output.recorder.pop_slice(&mut recorded);
-    let mut mirrored = vec![0i32; BLOCK * 2];
+    let mut mirrored = vec![0.0f32; BLOCK * 2];
     let m = captured.pop_slice(&mut mirrored);
 
     assert_eq!(n, BLOCK * 2, "both blocks reached the recorder");
@@ -214,16 +223,16 @@ fn a_callback_larger_than_the_monitoring_delay_is_not_dropped() {
     let (mut path, _captured) = build_audio_path(&control, &settings, TEST_RATE, 1, &[]);
 
     let frames = latency_frames * 4;
-    let input: Vec<i32> = (1..=frames as i32).collect();
+    let input: Vec<f32> = (1..=frames).map(|i| i as f32).collect();
     path.input.process(&input);
 
     let (_, spilled) = control.take_underrun_counts();
     assert_eq!(spilled, 0, "the passthrough ring could not hold one callback");
 
-    let mut out = vec![0i32; frames];
+    let mut out = vec![0.0f32; frames];
     path.output.process(&mut out);
 
-    let mut expected = vec![0i32; latency_frames];
+    let mut expected = vec![0.0f32; latency_frames];
     expected.extend_from_slice(&input[..frames - latency_frames]);
     assert_eq!(out, expected, "delayed by the monitoring delay, otherwise whole");
 }

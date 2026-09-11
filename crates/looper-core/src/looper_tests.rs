@@ -1,6 +1,6 @@
 use super::*;
 
-use looper_hal::BackendId;
+use looper_hal::{BackendId, HalError};
 use looper_hal::mock::{self, MockDriver, mock};
 
 /// Small enough to follow by hand, and a rate the mock device offers.
@@ -236,5 +236,64 @@ fn a_saved_loop_comes_back_stopped_rather_than_playing() {
         LoopState::Stopped,
         "there, but silent until it is asked for"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- When the device goes away ------------------------------------------
+
+#[test]
+fn a_stream_that_fails_says_so_on_the_screen() {
+    // A release build has no console, so a stream that stops without
+    // this leaves the app looking like it is working and silent.
+    let (mut looper, driver, dir) = start("looper-fault", &settings());
+    assert_eq!(looper.device_fault(), None, "nothing wrong yet");
+
+    driver.fail(HalError::Runtime("the device was unplugged".to_string()));
+
+    let reported = looper.device_fault().expect("the screen has something to show");
+    assert!(reported.contains("unplugged"), "got: {reported}");
+
+    // And it keeps saying so: the stream is gone, and only reopening a
+    // device puts that right.
+    looper.tick(false, Instant::now());
+    assert!(looper.device_fault().is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_fault_on_one_looper_does_not_follow_the_next() {
+    // Choosing a device again in Settings builds a new looper, which
+    // must start clean rather than inheriting the last one's failure.
+    let settings = settings();
+    let (looper, driver, dir) = start("looper-fault-reset", &settings);
+    driver.fail(HalError::Runtime("gone".to_string()));
+    assert!(looper.device_fault().is_some());
+    drop(looper);
+
+    let (fresh, _driver, _dir) = start("looper-fault-reset-2", &settings);
+    assert_eq!(fresh.device_fault(), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn underruns_are_counted_for_the_screen_rather_than_only_logged() {
+    // The console they used to go to doesn't exist in a release build,
+    // so a player whose latency is set too low heard the gaps and had
+    // nothing telling them which setting to reach for.
+    let (mut looper, driver, dir) = start("looper-underruns", &settings());
+    assert_eq!(looper.underruns(), 0);
+
+    // Capture with nothing draining it: the passthrough ring fills and
+    // then spills, which is the output side having fallen behind.
+    driver.capture(&vec![0.0; 200_000]);
+    looper.tick(false, Instant::now());
+
+    assert!(looper.underruns() > 0, "the screen has something to report");
+
+    // They accumulate: the count is since this looper started, not
+    // since the last frame, so a burst isn't shown and instantly lost.
+    let after_first = looper.underruns();
+    looper.tick(false, Instant::now());
+    assert_eq!(looper.underruns(), after_first, "and don't reset when read");
     let _ = std::fs::remove_dir_all(&dir);
 }

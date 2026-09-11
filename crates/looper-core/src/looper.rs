@@ -2,9 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use looper_hal::{AudioStream, Backends, HalError};
+use looper_hal::{AudioStream, Backends};
 
 use crate::audio::engine;
+use crate::audio::fault::StreamFault;
 use crate::audio::shared_control::SharedControl;
 use crate::state_machine::{LoopState, LoopStateMachine};
 use crate::config::{self, AppConfig};
@@ -41,6 +42,13 @@ pub struct LooperState {
     /// this rather than asking the clock again, so what a frame shows
     /// can't disagree with the state it was drawn beside.
     now: Instant,
+    /// Where the stream leaves word if it stops on its own - a device
+    /// unplugged mid-loop, or a driver giving up.
+    fault: StreamFault,
+    /// Underruns since this looper started. Accumulated rather than
+    /// shown as they happen: they arrive in bursts, and a line that
+    /// flickers is one nobody reads.
+    underruns: usize,
     /// Holding it is what keeps the audio running; dropping it stops.
     _stream: Box<dyn AudioStream>,
 }
@@ -64,12 +72,13 @@ impl LooperState {
         // Whatever was left from last time, if it still fits what's
         // configured now.
         let restored = loop_mirror::load(&loop_dir, settings);
+        let fault = StreamFault::default();
         let streams = engine::build_looper_streams(
             backends,
             Arc::clone(&control),
             settings,
             &restored,
-            report_stream_error(),
+            fault.sink(),
         )?;
 
         // A restored loop is there, but silent until it's asked for.
@@ -93,12 +102,32 @@ impl LooperState {
             sample_rate: streams.sample_rate,
             loop_dir,
             now: Instant::now(),
+            fault,
+            underruns: 0,
             _stream: streams.stream,
         })
     }
 
     pub fn state(&self) -> LoopState {
         self.state_machine.state()
+    }
+
+    /// Why the audio stopped, if it did.
+    ///
+    /// Nothing here tries to recover: a stream that has failed is gone,
+    /// and reopening means going back to Settings and choosing again -
+    /// which may be choosing a different device, if the last one was
+    /// unplugged.
+    pub fn device_fault(&self) -> Option<String> {
+        self.fault.message()
+    }
+
+    /// How many times the audio has fallen behind. Non-zero means the
+    /// loop has audible gaps in it and the latency setting is too low
+    /// for this machine - which the player can do something about, but
+    /// only if told.
+    pub fn underruns(&self) -> usize {
+        self.underruns
     }
 
     pub fn is_long_press_active(&self) -> bool {
@@ -249,10 +278,12 @@ impl LooperState {
         loop_mirror::delete(&self.loop_dir);
     }
 
-    /// Drained and logged here rather than in the callbacks, since stdio
-    /// isn't real-time safe.
-    fn log_underruns(&self) {
+    /// Drained here rather than in the callbacks, since stdio isn't
+    /// real-time safe. Kept as well as logged: a release build has no
+    /// console, so the count is what the screen has to go on.
+    fn log_underruns(&mut self) {
         let (input_underruns, output_underruns) = self.control.take_underrun_counts();
+        self.underruns += input_underruns + output_underruns;
         if input_underruns > 0 {
             eprintln!("input stream fell behind {input_underruns} time(s): try increasing latency");
         }
@@ -262,15 +293,6 @@ impl LooperState {
             );
         }
     }
-}
-
-/// Where a running stream reports trouble.
-///
-/// Still only stderr, which a release build has no console for - the
-/// in-app surface is its own task. What has changed is that there is now
-/// one place to put it, rather than a callback buried in the backend.
-fn report_stream_error() -> looper_hal::ErrorSink {
-    Arc::new(|error: HalError| eprintln!("{error}"))
 }
 
 #[cfg(test)]

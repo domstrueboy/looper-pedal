@@ -48,6 +48,30 @@ pub fn render(ui: &mut egui::Ui, looper: &mut LooperState) -> Option<Action> {
             });
             ui.add_space(8.0);
 
+            // Directly under the title, above everything the controls
+            // occupy: a release build has no console, so if this isn't
+            // on screen the audio simply stops with no explanation.
+            if let Some(fault) = looper.device_fault() {
+                ui.colored_label(egui::Color32::RED, format!("Audio stopped: {fault}"));
+                // Nothing here can reopen the device - the stream is
+                // gone - so point at the one place that can.
+                if ui.button("Choose a device").clicked() {
+                    action = Some(Action::OpenSettings);
+                }
+                ui.add_space(8.0);
+            }
+
+            // Not an error - the loop is still playing - but it has
+            // gaps in it, and nothing else on screen would say why.
+            let underruns = looper.underruns();
+            if underruns > 0 {
+                ui.colored_label(
+                    egui::Color32::from_rgb(200, 150, 60),
+                    format!("Audio fell behind {underruns}x - raise Latency in Settings"),
+                );
+                ui.add_space(8.0);
+            }
+
             ui.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = 10.0;
 

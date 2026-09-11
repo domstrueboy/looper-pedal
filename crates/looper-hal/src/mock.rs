@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::{
     AudioBackend, AudioStream, BackendId, DeviceCaps, DeviceId, DeviceInfo, Direction, ErrorSink,
@@ -22,6 +23,9 @@ pub const DEVICE: &str = "Mock Device";
 struct Running {
     input: Box<dyn InputProcessor>,
     output: Box<dyn OutputProcessor>,
+    /// Kept so a test can make the stream fail the way a device being
+    /// unplugged does.
+    on_error: ErrorSink,
 }
 
 #[derive(Default)]
@@ -200,10 +204,14 @@ impl OpenDevice for MockOpenDevice {
         self: Box<Self>,
         input: Box<dyn InputProcessor>,
         output: Box<dyn OutputProcessor>,
-        _on_error: ErrorSink,
+        on_error: ErrorSink,
     ) -> HalResult<Box<dyn AudioStream>> {
         let mut shared = self.shared.borrow_mut();
-        shared.running = Some(Running { input, output });
+        shared.running = Some(Running {
+            input,
+            output,
+            on_error,
+        });
         shared.starts += 1;
         drop(shared);
 
@@ -271,6 +279,38 @@ impl MockDriver {
         output
     }
 
+    /// The capture callback on its own, with nothing draining what it
+    /// produces - which is what one side falling behind the other looks
+    /// like from in here, and the only way to provoke an underrun
+    /// without a device that is genuinely struggling.
+    pub fn capture(&self, input: &[f32]) {
+        let mut shared = self.shared.borrow_mut();
+        let running = shared
+            .running
+            .as_mut()
+            .expect("capture() with no stream running");
+        for chunk in input.chunks(MAX_BLOCK_FRAMES * self.input_channels as usize) {
+            running.input.process(chunk);
+        }
+    }
+
+    /// Makes the running stream report trouble, the way a device being
+    /// unplugged mid-loop does. Does nothing if nothing is running.
+    pub fn fail(&self, error: HalError) {
+        // Cloned out before calling: the sink may well reach back into
+        // whatever owns this, and holding the borrow across it would
+        // panic rather than deliver.
+        let sink = self
+            .shared
+            .borrow()
+            .running
+            .as_ref()
+            .map(|running| Arc::clone(&running.on_error));
+        if let Some(sink) = sink {
+            sink(error);
+        }
+    }
+
     /// Whether a stream is open right now.
     pub fn is_running(&self) -> bool {
         self.shared.borrow().running.is_some()
@@ -287,7 +327,7 @@ impl MockDriver {
         let log = ErrorLog::default();
         let sink = log.clone();
         (
-            std::sync::Arc::new(move |error| sink.0.lock().expect("not poisoned").push(error)),
+            Arc::new(move |error| sink.0.lock().expect("not poisoned").push(error)),
             log,
         )
     }

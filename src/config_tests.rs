@@ -114,3 +114,39 @@ fn memory_is_the_product_of_length_layers_and_rate() {
     // 90s x 6 layers x 48000 x 4 bytes
     assert_eq!(config.loop_memory_bytes(), 90 * 6 * 48_000 * 4);
 }
+
+// --- The file half -----------------------------------------------------
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("looper-pedal-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+#[test]
+fn a_saved_file_reads_back_as_the_same_settings() {
+    let path = temp_dir("config-round-trip").join("config.toml");
+    saved().save_to(&path).expect("writes");
+
+    let read = AppConfig::load_from(&path).expect("reads back");
+    assert_eq!(read.device_name, "Audient USB Audio ASIO Driver");
+    assert_eq!(read.sample_rate, 48_000);
+    assert_eq!(read.max_layers, 6);
+}
+
+#[test]
+fn saving_creates_the_directory_it_needs() {
+    // A first run has no per-user config directory yet, so `save_to`
+    // has to make one rather than failing on the missing parent.
+    let path = temp_dir("config-makes-dir").join("config.toml");
+    assert!(!path.parent().expect("has a parent").exists());
+
+    saved().save_to(&path).expect("writes");
+    assert!(path.exists());
+}
+
+#[test]
+fn a_file_that_is_not_there_is_no_config() {
+    let path = temp_dir("config-absent").join("config.toml");
+    assert!(AppConfig::load_from(&path).is_none());
+}

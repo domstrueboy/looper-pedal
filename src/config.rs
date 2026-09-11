@@ -1,5 +1,5 @@
 use std::ops::RangeInclusive;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -103,18 +103,31 @@ impl AppConfig {
     /// Reads the config. `None` means there's nothing usable and the
     /// caller should show the settings picker.
     pub fn load() -> Option<Self> {
-        std::fs::read_to_string(config_path())
+        Self::load_from(&config_path())
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        self.save_to(&config_path())
+    }
+
+    /// Where `load` actually reads from. Split out so the file half can
+    /// be tested against a temp directory: `config_path()` is the real
+    /// per-user one, and a test that wrote there would clobber the
+    /// config of whoever ran it.
+    pub fn load_from(path: &Path) -> Option<Self> {
+        std::fs::read_to_string(path)
             .ok()
             .and_then(|text| Self::from_toml(&text))
     }
 
-    pub fn save(&self) -> Result<(), String> {
-        let path = config_path();
+    /// Creates the directory as well: on a first run nothing has made
+    /// the per-user config directory yet.
+    pub fn save_to(&self, path: &Path) -> Result<(), String> {
         if let Some(directory) = path.parent() {
             std::fs::create_dir_all(directory)
                 .map_err(|e| format!("creating {}: {e}", directory.display()))?;
         }
-        std::fs::write(&path, self.to_toml()?)
+        std::fs::write(path, self.to_toml()?)
             .map_err(|e| format!("writing {}: {e}", path.display()))
     }
 

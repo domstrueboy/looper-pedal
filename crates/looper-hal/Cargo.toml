@@ -3,7 +3,19 @@ name = "looper-hal"
 version.workspace = true
 edition.workspace = true
 
-# Deliberately none. The device backends that need `cpal` arrive behind
-# a feature, so a core test run - and any build for a platform this app
-# hasn't been taught yet - costs nothing and needs no SDK.
+# The traits, the types and the mock cost nothing. `cpal` arrives only
+# if someone asks for it, so a core test run - and any build for a
+# platform this app hasn't been taught yet - needs no audio SDK.
+[features]
+default = []
+cpal = ["dep:cpal"]
+# ASIO additionally needs the Steinberg SDK and LLVM at build time,
+# which is why it is not simply implied by `cpal`.
+asio = ["cpal", "cpal/asio"]
+
 [dependencies]
+cpal = { version = "0.18.2", optional = true }
+
+[[example]]
+name = "list_devices"
+required-features = ["cpal"]

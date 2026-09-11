@@ -14,6 +14,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(feature = "cpal")]
+pub mod cpal_backend;
 pub mod mock;
 
 /// The most frames a processor is handed in one call, so every buffer it

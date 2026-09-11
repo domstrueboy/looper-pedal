@@ -1912,6 +1912,9 @@ dependencies = [
 [[package]]
 name = "looper-hal"
 version = "0.1.5"
+dependencies = [
+ "cpal",
+]
 
 [[package]]
 name = "mach2"

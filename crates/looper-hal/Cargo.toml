@@ -1,0 +1,9 @@
+[package]
+name = "looper-hal"
+version.workspace = true
+edition.workspace = true
+
+# Deliberately none. The device backends that need `cpal` arrive behind
+# a feature, so a core test run - and any build for a platform this app
+# hasn't been taught yet - costs nothing and needs no SDK.
+[dependencies]

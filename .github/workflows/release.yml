@@ -58,11 +58,34 @@ jobs:
           # this (which would need the ASIO SDK set up before this step).
           # The version itself lives in the root `[workspace.package]`,
           # which is what the grep and sed above edit.
+          #
+          # EVERY member, not just the binary: they all inherit that one
+          # version, so bumping one and leaving the rest behind makes the
+          # lock stale in a way only `--locked` notices - which it does,
+          # two steps later, after the tag has already been pushed.
           awk -v old="$current" -v new="$new" '
-            /^name = "looper-app"$/ { found=1 }
-            found && /^version = / { sub(old, new); found=0 }
+            /^name = "looper-/ { found = 1 }
+            found && /^version = / {
+              if ($0 == "version = \"" old "\"") $0 = "version = \"" new "\""
+              found = 0
+            }
             { print }
           ' Cargo.lock > Cargo.lock.tmp && mv Cargo.lock.tmp Cargo.lock
+
+          # Checked here, because this is the last moment it can still be
+          # put right: everything after this pushes a tag, and a stale
+          # lock only shows up at `cargo test --locked` two steps later.
+          stale=$(awk -v new="$new" '
+            /^name = "looper-/ { found = 1; name = $0 }
+            found && /^version = / {
+              if ($0 != "version = \"" new "\"") print name
+              found = 0
+            }
+          ' Cargo.lock)
+          if [ -n "$stale" ]; then
+            echo "Cargo.lock not bumped to $new for: $stale" >&2
+            exit 1
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
